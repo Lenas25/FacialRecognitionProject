@@ -11,7 +11,6 @@ class Salon(db.Model):
     pabellon = Column(String(50))
     
     horarios = relationship("Horario", back_populates="salon")
-    desconocidos = relationship("Desconocido", back_populates="salon")
     
 class Horario(db.Model):
     __tablename__ = 'horario'
@@ -38,8 +37,9 @@ class Curso(db.Model):
 
 class Desconocido(db.Model):
     __tablename__ = 'desconocido'
-    id_horario = Column(BigInteger, ForeignKey('horario.id'), primary_key=True)
-    url_imagen = Column(String(255))
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    id_horario = Column(BigInteger, ForeignKey('horario.id'))
+    url_img = Column(String(255))
     fecha = Column(Date)
     
     horario = relationship("Horario", back_populates="desconocidos")

@@ -3,5 +3,7 @@ endpoints = {
     "salon": url + "salon",
     "reconocimiento": url + "reconocimiento",
     "asistencia": url + "asistencia",
-    "exportar": url + "exportar",
+    "reporte": url + "exportar",
+    "mensaje": url + "mensaje",
+    "desconocido": url + "desconocido",
   }

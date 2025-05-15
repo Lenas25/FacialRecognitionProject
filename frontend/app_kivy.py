@@ -17,9 +17,21 @@ import requests
 from kivy.storage.jsonstore import JsonStore
 from endpoints import endpoints
 import datetime
-import locale
+import cloudinary
+import cloudinary.uploader
+from flask import jsonify
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 kivy.require('2.0.0')
+
+cloudinary.config.update({
+    'cloud_name': os.environ.get('CLOUDINARY_CLOUD_NAME'),
+    'api_key': os.environ.get('CLOUDINARY_API_KEY'),
+    'api_secret': os.environ.get('CLOUDINARY_API_SECRET'),
+})
 
 class InicioSesionScreen(Screen):
 
@@ -107,6 +119,8 @@ class CamaraScreen(Screen):
         super().__init__(**kwargs)
         self.app = App.get_running_app()
         self.storage = JsonStore('local.json')
+        self.storage_asistencia = JsonStore('asistencia.json')
+        self.asistencias = []
         self.detectar_rostro = False
         self.orientation = 'horizontal'
         self.padding = dp(10)
@@ -133,6 +147,7 @@ class CamaraScreen(Screen):
     def on_leave(self, *args):
         self.stop_camera()
 
+    # Inicia la cámara y comienza a capturar frames
     def start_camera(self):
         self.cap = cv2.VideoCapture(0)
         self.event = Clock.schedule_interval(self.update_frame, 1.0 / 30.0)
@@ -145,6 +160,7 @@ class CamaraScreen(Screen):
             self.cap.release()
             self.cap = None
 
+    # Actualiza el frame de la cámara
     def update_frame(self, dt):
         if self.cap and self.cap.isOpened():
             ret, frame = self.cap.read()
@@ -187,13 +203,31 @@ class CamaraScreen(Screen):
                 break
             else:
                 self.detectar_rostro = False
-                # self.guardar_asistencia(horario['id'])
-                # self.enviar_reporte(horario['id'])
+                self.guardar_asistencia(horario['id'])
+                self.enviar_reporte(horario['id'])
                 print("Fuera del rango, guardando asistencia y enviando reporte...")
                 break
+        
+    def reconocer_rostro(self, personas):
+        """
+        Lenin, necesito que hagas que esta funcion se este ejecutando cada rato y establece la logica para en que momento recibir todos los datos de la base de datos tanto usuarios como profesores ya que habra links y de esos links se va a comparar la imagen, simula un array de imagenes, el modelo debe retornar lo siguiente:
+        si es un conocido, llamar a la funcion guardar_asistencia_local
+        {
+            id: 1,
+            rol: 0, # 0 = alumno, 1 = profesor
+        }
+        si es un desconcido y llamar a la funcion guardar_desconocido y enviar la imagen para que sea guardada
+        {
+            id: 0, o null
+        }
+        
+        """
+        
+        
+        
+        pass
     
-    def guardar_asistencia(self, instance):
-        # calcular tiempo de el json que se esta guardando
+    def guardar_asistencia(self, porcentaje_asistencia):
         #[{ id: 1, hora_detectado: "12:00", rol:0}
         #{ id: 1, hora_detectado: "14:00", rol:0}
         #{ id: 1, hora_detectado: "14:30", rol:0}
@@ -206,34 +240,61 @@ class CamaraScreen(Screen):
         #{ id: 2, tiempo: "30", rol:1}
         
         
-        
-        
+        """
+        Lenin aqui necesito que simules que tienes datos y tienes que calcular asi sea de 2 o 3 uduarios con id unicos que verifique por id y rol si es estudiantte o preofesor cuanto tiempo en minutos han estado en clase considerando que cada registro es ingreso y otro salida, si el utimo que se registro es un ingreso y no una salida se considera ausente.
+        """
         
         pass
     
-    def enviar_reporte(self, instance):
+    def guardar_asistencia_local(self, datos):
+        # de datos se recibe solo la id y el rol
+        datos["hora_detectado"] = datetime.datetime.now().strftime("%H:%M:%S")
+        self.asistencias = self.storage_asistencia.get("asistencia")["asistencia"] if self.storage_asistencia.exists("asistencia") else []
+        self.asistencias.append(datos)
+        self.storage_asistencia.put("asistencia", asistencia=self.asistencias)
+    
+    def enviar_reporte(self, id_horario):
         # se ejecuta e enviar reporte y mensaje en el mismo
+        response = requests.post(f'{endpoints["reporte"]}/{self.storage.get("salon")["salon"]}/{id_horario}')
         
-        pass
+        if response.status_code == 200:
+            print("Reporte enviado correctamente")
+        else:
+            print(response.json())
         
-    def reconocer_rostro(self, personas):
-        # Aquí puedes implementar la lógica para reconocer el rostro, cada que se registra se va a ir colocando en un storage a paarte quien va ingresando y saliendo
-        # cada que se detecta un rostro se guarda en el json
-        # detectados
+        response2 = requests.post(f'{endpoints["mensaje"]}/{id_horario}')
+        if response2.status_code == 200:
+            print("Mensaje enviado correctamente")
+        else:
+            print(response.json())
         
-        pass
     
-    def guardar_desconocido(self, frame):
-        # Aquí puedes implementar la lógica para guardar el rostro desconocido
-        # si en reconocer rostro no se encuentra a nadie entonces se guarda el rostro desconocido, mandnando un frame a la funcion guardar_desconocido
-        # y se manda a la base de datos subiendo la imagen a cloudinary
-        
-        
-        
-        pass
+    def guardar_desconocido(self, frame, id_horario):
+        """
+        Recibe un frame de la imagen como un array de vectores de cv2,
+        lo convierte a imagen, lo guarda en Cloudinary y guarda el link en la base de datos.
+        """
+        try:
+            _, img_encoded = cv2.imencode('.jpg', frame) 
+            img_bytes = img_encoded.tobytes() 
+
+            upload_result = cloudinary.uploader.upload(img_bytes, resource_type="image") 
+
+            imagen_url = upload_result['secure_url']
+
+            response = requests.post(f'{endpoints["desconocido"]}/{id_horario}', json={"url_img": imagen_url})
+            if response.status_code == 200:
+                return jsonify({'mensaje': 'Desconocido guardado correctamente'}), 200
+            else:
+                return jsonify({'mensaje': 'Error al guardar desconocido'}), 500
+            
+        except Exception as e:
+            return jsonify({'mensaje': f'Error al guardar desconocido: {str(e)}'}), 500
+            
     
     
-    # falta calcular en memoria el tiempo que paran en clase y mandarlo calculr y colocar su estado
+    def on_stop(self):
+        self.storage_asistencia.close()
 
 class ReconocimientoFacialApp(App):
     def __init__(self, **kwargs): # add the __init__

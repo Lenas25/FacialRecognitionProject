@@ -1,12 +1,7 @@
 # backend/app_flask.py
 from flask import Flask, jsonify, request
-from flask_sqlalchemy import SQLAlchemy
 from schemas import Salon, AsistenciaAlumno, AsistenciaProfesor, Horario, Desconocido
 from database import db
-import cloudinary
-import cloudinary.uploader
-from cloudinary.utils import cloudinary_url
-from datetime import datetime
 import os
 import pandas as pd
 import smtplib
@@ -15,14 +10,10 @@ from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
 from twilio.rest import Client
+import datetime
+from dotenv import load_dotenv
 
-# Configuration       
-cloudinary.config( 
-    cloud_name = "djuqnewtm", 
-    api_key = "678795231676999", 
-    api_secret = "VjaJCyjOtBnvsY6jieWnV6yogI4",
-    secure=True
-)
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -125,8 +116,13 @@ def registrar_asistencia(id_horario):
 
 @app.route('/desconocido/<id_horario>', methods=['POST'])
 def registrar_desconocido(id_horario):
+    # se recibe en el formato {
+    #"id_horario":11,
+    #"url_imagen":"",
+    #}
+    
     data = request.get_json()
-
+    print(data)
     if not data:
         return jsonify({"message": "Es necesario información."}), 400
 
@@ -137,7 +133,7 @@ def registrar_desconocido(id_horario):
     new_desconocido = Desconocido(
         id_horario=id_horario,
         url_img=data['url_img'],
-        fecha=data['fecha'],
+        fecha=datetime.datetime.now().strftime("%Y-%m-%d"),
     )
 
     try:
@@ -152,9 +148,9 @@ def registrar_desconocido(id_horario):
 @app.route('/reporte/<salon>/<id_horario>', methods=['POST'])
 def enviar_reporte(salon, id_horario):
     
-    EMAIL_ADDRESS = 'tu_correo@gmail.com'
-    EMAIL_PASSWORD = 'tu_contraseña'
-    RECIPIENT_EMAIL = 'correo_del_destinatario@example.com'
+    EMAIL_ADDRESS = os.getenv('EMAIL_ADDRESS')
+    EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')
+    RECIPIENT_EMAIL = os.getenv('RECIPIENT_EMAIL')
     
     try:
         alumnos = AsistenciaAlumno.query.filter_by(id_horario=id_horario).all()
@@ -170,10 +166,26 @@ def enviar_reporte(salon, id_horario):
 
         excel_filename = 'reporte_asistencia.xlsx'
         
-        with pd.ExcelWriter(excel_filename) as writer:
+        with pd.ExcelWriter(excel_filename, engine="xlsxwriter") as writer:
             df_alumnos.to_excel(writer, sheet_name='Alumnos', index=False)
             df_docentes.to_excel(writer, sheet_name='Docentes', index=False)
             df_desconocidos.to_excel(writer, sheet_name='Desconocidos', index=False)
+        
+            worksheet_alumnos = writer.sheets['Alumnos']
+            worksheet_docentes = writer.sheets['Docentes']
+            worksheet_desconocidos = writer.sheets['Desconocidos']
+
+            for i, col in enumerate(df_alumnos.columns):
+                column_len = max(df_alumnos[col].astype(str).map(len).max(), len(col))
+                worksheet_alumnos.set_column(i, i, column_len + 2)
+
+            for i, col in enumerate(df_docentes.columns):
+                column_len = max(df_docentes[col].astype(str).map(len).max(), len(col))
+                worksheet_docentes.set_column(i, i, column_len + 2)
+
+            for i, col in enumerate(df_desconocidos.columns):
+                column_len = max(df_desconocidos[col].astype(str).map(len).max(), len(col))
+                worksheet_desconocidos.set_column(i, i, column_len + 2)
 
         mensaje = MIMEMultipart()
         mensaje['From'] = EMAIL_ADDRESS
@@ -217,33 +229,31 @@ def enviar_reporte(salon, id_horario):
 # enviar mensaje a contactos de quienes tienen una falta en su asistencia
 @app.route('/mensaje/<id_horario>', methods=['POST'])
 def enviar_mensaje(id_horario):
-    TWILIO_ACCOUNT_SID = os.environ.get('TWILIO_ACCOUNT_SID')
-    TWILIO_AUTH_TOKEN = os.environ.get('TWILIO_AUTH_TOKEN')
-    TWILIO_PHONE_NUMBER = os.environ.get('TWILIO_PHONE_NUMBER')
+    TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
+    TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
+    TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER')
     
     if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER]):
         raise ValueError("Las variables de entorno de Twilio (TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER) deben estar configuradas.")
 
-    client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+    cliente = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
     
-    alumnos_ausentes = AsistenciaAlumno.query.filter(AsistenciaAlumno.horario_id == id_horario, AsistenciaAlumno.estado == 'Ausente').all()
-    
+    alumnos_ausentes = AsistenciaAlumno.query.filter(AsistenciaAlumno.id_horario == id_horario, AsistenciaAlumno.estado == 'ausente').all()
     for alumno_ausente in alumnos_ausentes:
         alumno = alumno_ausente.alumno 
         if alumno.contacto:
             mensaje_texto = f"Estimado, se le informa que el alumno, {alumno.nombre} {alumno.apellido}, tiene una falta en la clase de hoy. Por favor, tener en cuenta que el alumno tiene que justificar su falta."
             try:
-                mensaje = client.message.create(
-                    to=alumno.telefono,  # Usar el número de teléfono del alumno
+                mensaje = cliente.messages.create(
+                    to=alumno.contacto,
                     from_=TWILIO_PHONE_NUMBER,
                     body=mensaje_texto
                 )
-                print(f"Mensaje enviado a {alumno.nombre} {alumno.apellido} ({alumno.codigo_universitario}): {mensaje.sid}")
+                return jsonify({'mensaje': f"Mensaje enviado a {alumno.nombre} {alumno.apellido} ({alumno.codigo_universitario}): {mensaje.sid}"}), 200
             except Exception as e:
-                print(f"Error al enviar mensaje a {alumno.nombre} {alumno.apellido} ({alumno.codigo_universitario}): {e}")
+                return jsonify({'mensaje': f"Error al enviar mensaje a {alumno.nombre} {alumno.apellido} ({alumno.codigo_universitario}): {e}"}), 400
         else:
-            print(f"No se puede enviar mensaje a {alumno.nombre} {alumno.apellido} ({alumno.codigo_universitario}): No tiene número de teléfono registrado.")
-    return jsonify({'mensaje': 'Mensajes enviados (ver registro para detalles)'}), 200
+            return jsonify({'mensaje': f"No se puede enviar mensaje a {alumno.nombre} {alumno.apellido} ({alumno.codigo_universitario}): No tiene número de teléfono registrado."}), 400
 
     
 if __name__ == '__main__':

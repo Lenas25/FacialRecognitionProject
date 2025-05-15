@@ -1,1 +1,27 @@
-{"salon": {"salon": "B0205"}, "horario": {"horario": {"horarios": [{"curso": "Sistemas Distribuidos", "dia_semana": "mi\u00e9rcoles", "hora_fin": "20:00", "hora_inicio": "18:30", "id": 11, "id_curso": 2}, {"curso": "Inteligencia Artificial", "dia_semana": "mi\u00e9rcoles", "hora_fin": "18:00", "hora_inicio": "15:30", "id": 12, "id_curso": 3}], "mensaje": "Horarios encontrados."}}, "horario_dia": {"horario_dia": [{"curso": "Sistemas Distribuidos", "dia_semana": "mi\u00e9rcoles", "hora_fin": "20:00", "hora_inicio": "18:30", "id": 11, "id_curso": 2}, {"curso": "Inteligencia Artificial", "dia_semana": "mi\u00e9rcoles", "hora_fin": "18:00", "hora_inicio": "15:30", "id": 12, "id_curso": 3}]}}
+{
+  "salon": { "salon": "B0205" },
+  "horario": {
+    "horario": {
+      "horarios": [
+        {
+          "curso": "Sistemas Distribuidos",
+          "dia_semana": "mi\u00e9rcoles",
+          "hora_fin": "20:00",
+          "hora_inicio": "18:30",
+          "id": 11,
+          "id_curso": 2
+        },
+        {
+          "curso": "Inteligencia Artificial",
+          "dia_semana": "mi\u00e9rcoles",
+          "hora_fin": "18:00",
+          "hora_inicio": "15:30",
+          "id": 12,
+          "id_curso": 3
+        }
+      ],
+      "mensaje": "Horarios encontrados."
+    }
+  },
+  "horario_dia": { "horario_dia": [] }
+}
