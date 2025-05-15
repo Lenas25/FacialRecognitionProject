@@ -2,3 +2,4 @@ venv/
 .env
 backend/__pycache__/
 frontend/__pycache__/
+local.json
