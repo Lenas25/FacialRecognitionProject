@@ -1,6 +1,6 @@
 # backend/app_flask.py
 from flask import Flask, jsonify, request
-from schemas import Salon, AsistenciaAlumno, AsistenciaProfesor, Horario, Desconocido
+from schemas import Salon, AsistenciaAlumno, AsistenciaProfesor, Horario, Desconocido, Matricula, Curso, Alumno, Profesor
 from database import db
 import os
 import pandas as pd
@@ -114,6 +114,7 @@ def registrar_asistencia(id_horario):
         db.session.rollback()
         return jsonify({'error': f'Error al insertar el grupo de asistencias: {str(e)}'}), 500
 
+# registrar la imagen de un desconocido en la base de datos considerando la fecha de registro
 @app.route('/desconocido/<id_horario>', methods=['POST'])
 def registrar_desconocido(id_horario):
     # se recibe en el formato {
@@ -153,9 +154,18 @@ def enviar_reporte(salon, id_horario):
     RECIPIENT_EMAIL = os.getenv('RECIPIENT_EMAIL')
     
     try:
-        alumnos = AsistenciaAlumno.query.filter_by(id_horario=id_horario).all()
-        profesores = AsistenciaProfesor.query.filter_by(id_horario=id_horario).all() 
-        desconocidos = Desconocido.query.filter_by(id_horario=id_horario).all()
+        alumnos = AsistenciaAlumno.query.filter(
+            id_horario == id_horario,
+            AsistenciaAlumno.fecha == datetime.datetime.now().date()
+        ).all()
+        profesores = AsistenciaProfesor.query.filter(
+            id_horario==id_horario, 
+            AsistenciaAlumno.fecha == datetime.datetime.now().date()
+        ).all() 
+        desconocidos = Desconocido.query.filter(
+            id_horario==id_horario,
+            Desconocido.fecha == datetime.datetime.now().date()
+        ).all()
         
         df_desconocidos = pd.DataFrame([(d.id_horario, d.url_img, d.fecha) for d in desconocidos],
                                      columns=['Seccion', 'Imagen', 'Fecha de Detección'])
@@ -224,7 +234,8 @@ def enviar_reporte(salon, id_horario):
 
     except Exception as e:
         print(f"Error al generar y enviar el reporte: {e}") #Loggear el error
-        return jsonify({'mensaje': f'Error al generar el reporte: {str(e)}'}), 500  # Devuelve un error 500
+        return jsonify({'mensaje': f'Error al generar el reporte: {str(e)}'}), 500  
+
 
 # enviar mensaje a contactos de quienes tienen una falta en su asistencia
 @app.route('/mensaje/<id_horario>', methods=['POST'])
@@ -255,6 +266,29 @@ def enviar_mensaje(id_horario):
         else:
             return jsonify({'mensaje': f"No se puede enviar mensaje a {alumno.nombre} {alumno.apellido} ({alumno.codigo_universitario}): No tiene número de teléfono registrado."}), 400
 
+@app.route('/usuarios/<id_horario>', methods=['GET'])
+def obtener_usuarios(id_horario):
+    alumnos = Matricula.query.filter_by(id_horario=id_horario).all()
+    profesores = Profesor.query.all()
+    
+    # debe retornar un json con la lista de alumnos y profesores
+    usuarios_list = []
+    
+    for alumno in alumnos:
+        usuarios_list.append({
+            "id": alumno.id_alumno,
+            "url_img": alumno.alumno.url_img,
+            "tipo": 0  # 0 para alumnos
+        })
+    
+    for profesor in profesores:
+        usuarios_list.append({
+            "id": profesor.id,
+            "url_img": profesor.url_img,
+            "tipo": 1  # 1 para profesores
+        })
+    
+    return jsonify({"usuarios": usuarios_list}), 200
     
 if __name__ == '__main__':
     app.run(debug=True)

@@ -27,6 +27,14 @@ class Horario(db.Model):
     asistencia_alumnos = relationship("AsistenciaAlumno", back_populates="horario")
     asistencia_profesores = relationship("AsistenciaProfesor", back_populates="horario")
     desconocidos = relationship("Desconocido",back_populates="horario")
+    matriculas = relationship("Matricula", back_populates="horario")
+
+class Matricula(db.Model):
+    id_horario = Column(BigInteger, ForeignKey('horario.id'), primary_key=True)
+    id_alumno = Column(BigInteger, ForeignKey('alumno.id'), primary_key=True)
+    
+    horario = relationship("Horario", back_populates="matriculas")
+    alumno = relationship("Alumno", back_populates="matriculas")
 
 class Curso(db.Model):
     __tablename__ = 'curso'
@@ -54,6 +62,7 @@ class Alumno(db.Model):
     contacto = Column(String(50))
     
     asistencia = relationship("AsistenciaAlumno", back_populates="alumno")
+    matriculas = relationship("Matricula", back_populates="alumno")
 
 class Profesor(db.Model):
     __tablename__ = 'profesor'
@@ -62,7 +71,7 @@ class Profesor(db.Model):
     apellido = Column(String(50))
     correo = Column(String(50))
     url_img = Column(String(255))
-    constraseña = Column(String(50))
+    contrasena = Column(String(255))
     codigo = Column(String(20))
     
     asistencia = relationship("AsistenciaProfesor", back_populates="profesor")

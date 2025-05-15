@@ -17,29 +17,32 @@ import requests
 from kivy.storage.jsonstore import JsonStore
 from endpoints import endpoints
 import datetime
-import cloudinary
-import cloudinary.uploader
 from flask import jsonify
 import os
 from dotenv import load_dotenv
+import cloudinary
+import cloudinary.uploader
+from cloudinary.utils import cloudinary_url
 
 load_dotenv()
 
 kivy.require('2.0.0')
 
-cloudinary.config.update({
-    'cloud_name': os.environ.get('CLOUDINARY_CLOUD_NAME'),
-    'api_key': os.environ.get('CLOUDINARY_API_KEY'),
-    'api_secret': os.environ.get('CLOUDINARY_API_SECRET'),
-})
+cloudinary.config(
+    cloud_name= os.environ.get('CLOUDINARY_NAME'),
+    api_key = os.environ.get('CLOUDINARY_API_KEY'),
+    api_secret = os.environ.get('CLOUDINARY_API_SECRET'),
+    secure = True
+)
 
+# es la pantalla principal donde se inicia la aplicacion si no se tiene el local.json
 class InicioSesionScreen(Screen):
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.app = App.get_running_app()
         self.storage = JsonStore('local.json')
 
+    # Esta funcion se ejecuta cuando se da click en el boton de guardar, y tambien en local guarda el salon y el horario actual
     def validar_y_abrir_camara(self):
         salon_ingresado = self.ids.salon_input.text.strip()
         codigo_ingresado = self.ids.codigo_admin_input.text.strip()
@@ -53,7 +56,7 @@ class InicioSesionScreen(Screen):
         else:
             try:
                 response = requests.post(endpoints["salon"], json={"salon": salon_ingresado})
-                if response.status_code == 200 and codigo_ingresado:
+                if response.status_code == 200 and codigo_ingresado == "admin":
                     self.storage.put("salon",salon = salon_ingresado)
                     self.storage.put("horario",horario = response.json())
                     self.actualizar_horario_dia()
@@ -107,6 +110,7 @@ class InicioSesionScreen(Screen):
         horarios_dia = [horario for horario in horarios if horario['dia_semana'] == dia_semana]
         self.storage.put('horario_dia',horario_dia = horarios_dia)
 
+# Pantalla de la cámara que muestra la imagen en vivo y hay un boton para cambiar a la pantalla de inicio de sesión
 class CamaraScreen(Screen):
     """
     Pantalla para mostrar la cámara usando OpenCV.
@@ -160,12 +164,20 @@ class CamaraScreen(Screen):
             self.cap.release()
             self.cap = None
 
-    # Actualiza el frame de la cámara
+    """
+    LENIN AQUI ES DONDE SE HACE LA ACTUALIACION POR FRAME, la funcion de reconocer rostro debe obtener los usuarios del horario puedes usar el endpoint usuarios para obtener el array de usuarios y profesores con su respectico id, link y rol, la pregunta es en que momento se le mandara esos datos
+    """
     def update_frame(self, dt):
         if self.cap and self.cap.isOpened():
             ret, frame = self.cap.read()
             if ret:
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                if self.detectar_rostro:
+                    # cada que se actualiza el frame se verifica si se debe detectar rostro
+                    # Aquí se llamaría a la función de reconocimiento facial
+                    # personas = self.reconocer_rostro(frame_rgb)
+                    # self.reconocer_rostro(personas)
+                    pass
                 buf = cv2.flip(frame_rgb, -1).tobytes()
                 image_texture = Texture.create(size=(frame.shape[1], frame.shape[0]), colorfmt='rgb')
                 image_texture.blit_buffer(buf, bufferfmt='ubyte')
@@ -179,6 +191,7 @@ class CamaraScreen(Screen):
         self.stop_camera()
         self.app.root.current = 'inicio_sesion_screen'
 
+    # esta funcion sirve para poder actualizar la hora cada segundo y cada minuto se verifica si la hora actual se encuentra o no en el rango de la clase del dia de hoy
     def actualizar_hora(self, dt):
         now = datetime.datetime.now()
         current_time_str = now.strftime('%H:%M:%S')
@@ -189,21 +202,37 @@ class CamaraScreen(Screen):
             self.verificar_horario(now, 5, 5)
             self.ultimo_minuto_verificado = minuto_actual
 
+    # esta funcion verifica si la hora actual se encuentra en el rango de horario del dia de hoy, si es asi se activa la deteccion de rostro, si no y esta en la final de hora se envia el reporte de la clase y se guarda la asistencia calculada por local
     def verificar_horario(self, hora_actual, minutos_antes=5, minutos_despues=5):
         # hora actual 15:30
         horarios_hoy = self.storage.get('horario_dia')['horario_dia']
-        
         for horario in horarios_hoy:
-            hora_antes = (horario["hora_inicio"] - datetime.timedelta(minutes=minutos_antes)).strftime("%H:%M:%S")
-            hora_despues = (horario["hora_fin"] + datetime.timedelta(minutes=minutos_despues)).strftime("%H:%M:%S")
+            hora_inicio_str = horario["hora_inicio"]
+            hora_fin_str = horario["hora_fin"]
+
+            try:
+                hora_inicio = datetime.datetime.strptime(hora_inicio_str, "%H:%M:%S").time()
+            except ValueError:
+                hora_inicio = datetime.datetime.strptime(hora_inicio_str, "%H:%M").time()
+            try:
+                hora_fin = datetime.datetime.strptime(hora_fin_str, "%H:%M:%S").time()
+            except ValueError:
+                hora_fin = datetime.datetime.strptime(hora_fin_str, "%H:%M").time()
+
+            fecha_hoy = hora_actual.date()
+            hora_inicio_dt = datetime.datetime.combine(fecha_hoy, hora_inicio)
+            hora_fin_dt = datetime.datetime.combine(fecha_hoy, hora_fin)
+            hora_antes = (hora_inicio_dt - datetime.timedelta(minutes=minutos_antes)).strftime("%H:%M:%S")
+            hora_despues = (hora_fin_dt + datetime.timedelta(minutes=minutos_despues)).strftime("%H:%M:%S")
             # si la hora actual esta entre ese rango entonces sigue detectando rostros
-            if hora_actual.strftime("%H:%M:%S") >= hora_antes and hora_actual.strftime("%H:%M:%S") <= hora_despues:
+            print(f"Verificando horario: {horario['id']} de {hora_antes} a {hora_despues}")
+            if hora_actual.strftime("%H:%M:%S") >= hora_antes and hora_actual.strftime("%H:%M:%S") < hora_despues:
                 self.detectar_rostro = True
                 print("En el rando, detectando rostro...")
                 break
-            else:
+            elif hora_actual.strftime("%H:%M:%S") == hora_despues:
                 self.detectar_rostro = False
-                self.guardar_asistencia(horario['id'])
+                # self.guardar_asistencia(horario['id'])
                 self.enviar_reporte(horario['id'])
                 print("Fuera del rango, guardando asistencia y enviando reporte...")
                 break
@@ -227,7 +256,7 @@ class CamaraScreen(Screen):
         
         pass
     
-    def guardar_asistencia(self, porcentaje_asistencia):
+    def calcular_asistencia(self, porcentaje_asistencia):
         #[{ id: 1, hora_detectado: "12:00", rol:0}
         #{ id: 1, hora_detectado: "14:00", rol:0}
         #{ id: 1, hora_detectado: "14:30", rol:0}
@@ -235,17 +264,29 @@ class CamaraScreen(Screen):
         #{ id: 2, hora_detectado: "12:00", rol:1}
         #{ id: 1, hora_detectado: "14:00", rol:0}]
         
-        
-        #{ id: 1, tiempo: "40", rol:0}
-        #{ id: 2, tiempo: "30", rol:1}
+        # debe retornar
+        #[{ id: 1, tiempo: "40", rol:0}
+        #{ id: 2, tiempo: "30", rol:1}]
         
         
         """
         Lenin aqui necesito que simules que tienes datos y tienes que calcular asi sea de 2 o 3 uduarios con id unicos que verifique por id y rol si es estudiantte o preofesor cuanto tiempo en minutos han estado en clase considerando que cada registro es ingreso y otro salida, si el utimo que se registro es un ingreso y no una salida se considera ausente.
         """
         
+        
         pass
-    
+
+    # esta funcion guarda la asistencia de varios usuarios en la base de datos, recibe el id del horario y envia los datos calculados por calcular_asistencia
+    def guardar_asistencia(self, id_horario):
+        datos = self.calcular_asistencia(0.8)
+        response = requests.post(f'{endpoints["asistencia"]}/{id_horario}', json=datos)
+        if response.status_code == 200:
+            self.storage_asistencia.clear()
+            print("Asistencia guardada correctamente")
+        else:
+            print(f"Error al guardar asistencia: {response.json()}")
+        
+    # esta funcion se ejecuta cuando se detecta un rostro conocido, guarda la asistencia localmente y se va acumulando hasta que se finalice la clase
     def guardar_asistencia_local(self, datos):
         # de datos se recibe solo la id y el rol
         datos["hora_detectado"] = datetime.datetime.now().strftime("%H:%M:%S")
@@ -253,27 +294,31 @@ class CamaraScreen(Screen):
         self.asistencias.append(datos)
         self.storage_asistencia.put("asistencia", asistencia=self.asistencias)
     
+    # esta funcion se encarga de enviar el reporte y el mensaje al servidor, recibe el id del horario y envia el reporte y mensaje
     def enviar_reporte(self, id_horario):
         # se ejecuta e enviar reporte y mensaje en el mismo
-        response = requests.post(f'{endpoints["reporte"]}/{self.storage.get("salon")["salon"]}/{id_horario}')
-        
-        if response.status_code == 200:
-            print("Reporte enviado correctamente")
-        else:
+        try:
+            response = requests.post(f'{endpoints["reporte"]}/{self.storage.get("salon")["salon"]}/{id_horario}')
+            print(f"Enviando reporte para el horario {id_horario}...")
             print(response.json())
+            if response.status_code == 200:
+                print("Reporte enviado correctamente")
+            else:
+                print(response.json())
+        except requests.exceptions.RequestException as e:
+            print(f"Error al enviar el reporte: {e}")
         
-        response2 = requests.post(f'{endpoints["mensaje"]}/{id_horario}')
-        if response2.status_code == 200:
-            print("Mensaje enviado correctamente")
-        else:
-            print(response.json())
+        try:
+            response2 = requests.post(f'{endpoints["mensaje"]}/{id_horario}')
+            if response2.status_code == 200:
+                print("Mensaje enviado correctamente")
+            else:
+                print(response.json())
+        except requests.exceptions.RequestException as e:
+            print(f"Error al enviar el mensaje: {e}")
         
-    
+    # esta funcion se encarga de guardar un desconocido, recibe el frame de la imagen y el id del horario, lo convierte a imagen, lo guarda en Cloudinary y guarda el link en la base de datos   
     def guardar_desconocido(self, frame, id_horario):
-        """
-        Recibe un frame de la imagen como un array de vectores de cv2,
-        lo convierte a imagen, lo guarda en Cloudinary y guarda el link en la base de datos.
-        """
         try:
             _, img_encoded = cv2.imencode('.jpg', frame) 
             img_bytes = img_encoded.tobytes() 
@@ -281,7 +326,7 @@ class CamaraScreen(Screen):
             upload_result = cloudinary.uploader.upload(img_bytes, resource_type="image") 
 
             imagen_url = upload_result['secure_url']
-
+            print(f"Imagen subida a Cloudinary: {imagen_url}")
             response = requests.post(f'{endpoints["desconocido"]}/{id_horario}', json={"url_img": imagen_url})
             if response.status_code == 200:
                 return jsonify({'mensaje': 'Desconocido guardado correctamente'}), 200
@@ -290,14 +335,32 @@ class CamaraScreen(Screen):
             
         except Exception as e:
             return jsonify({'mensaje': f'Error al guardar desconocido: {str(e)}'}), 500
-            
-    
     
     def on_stop(self):
         self.storage_asistencia.close()
+    
+    # esta funcion servira cuando se se detectte se mostrara un pop up pero por 2 segundos y se mostrara el mensaje de que se ha detectado un rostro conocido o desconocido
+    def mostrar_popup(self, title, content):
+        popup = Popup(
+        title=title,
+        size_hint=(0.8, 0.4),
+        auto_dismiss=True,
+        )
+        box = BoxLayout(orientation='vertical')
+        label = Label(text=content)
+        close_button = Button(
+            text="Cerrar",
+            size_hint_y=None,
+            height=dp(40),
+            on_press=popup.dismiss
+        )
+        box.add_widget(label)
+        box.add_widget(close_button)
+        popup.content = box
+        popup.open()
 
 class ReconocimientoFacialApp(App):
-    def __init__(self, **kwargs): # add the __init__
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.storage = JsonStore('local.json')
     
