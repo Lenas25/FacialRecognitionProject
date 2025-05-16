@@ -128,7 +128,7 @@ class CamaraScreen(Screen):
         self.storage = JsonStore('local.json')
         self.storage_asistencia = JsonStore('asistencia.json')
         self.asistencias = []
-        self.detectar_rostro = False
+        self.detectar_rostro = True
         self.orientation = 'horizontal'
         self.padding = dp(10)
         self.spacing = dp(10)
@@ -168,6 +168,7 @@ class CamaraScreen(Screen):
         laplacian = cv2.Laplacian(gray, cv2.CV_64F)
         varianza = np.var(laplacian)
         return varianza
+
     def detectar_cara_centrada(self, frame):
         """
         Detecta si una cara está centrada en el frame utilizando YOLOv8.
@@ -217,7 +218,7 @@ class CamaraScreen(Screen):
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 varianza_laplace = self.calcular_varianza_laplace(frame_rgb) #calcula nitidez
 
-                if self.detectar_rostro and self.detectar_cara_centrada(frame_rgb) and varianza_laplace > self.varianza_laplace_min:
+                if self.detectar_rostro and self.detectar_cara_centrada(frame_rgb) and varianza_laplace > self.varianza_laplace_minima:
                     # La detección de rostro está activa, la cara está centrada y la imagen es nítida
                     # Aquí se llamaría a la función de reconocimiento facial
                     persona = self.reconocer_rostro(frame_rgb)
@@ -298,52 +299,52 @@ class CamaraScreen(Screen):
         }
         
         """
-        if not self.current_horario_id:
-            print("No hay horario activo para el reconocimiento.")
-            return
+        # if not self.current_horario_id:
+        #     print("No hay horario activo para el reconocimiento.")
+        #     return
 
-        try:
-            # 1. Encode the frame
-            _, img_encoded = cv2.imencode('.jpg', frame)
-            img_bytes = img_encoded.tobytes()
+        # try:
+        #     # 1. Encode the frame
+        #     _, img_encoded = cv2.imencode('.jpg', frame)
+        #     img_bytes = img_encoded.tobytes()
 
-            # 2. Prepare files for the request
-            files = {'image_file': ('frame.jpg', img_bytes, 'image/jpeg')}
+        #     # 2. Prepare files for the request
+        #     files = {'image_file': ('frame.jpg', img_bytes, 'image/jpeg')}
             
-            # 3. Send to backend IA endpoint
-            # Assuming endpoints["IA"] is correctly defined
-            ia_endpoint = endpoints["IA"]
-            response = requests.post(ia_endpoint, files=files)
-            response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
+        #     # 3. Send to backend IA endpoint
+        #     # Assuming endpoints["IA"] is correctly defined
+        #     ia_endpoint = endpoints["IA"]
+        #     response = requests.post(ia_endpoint, files=files)
+        #     response.raise_for_status() # Raise an exception for HTTP errors (4xx or 5xx)
 
-            # 4. Process response
-            data = response.json()
+        #     # 4. Process response
+        #     data = response.json()
             
-            if data.get('id') and data.get('id') != 0 and data.get('id') is not None: # Known person
-                # Expected: { "id": 1, "rol": 0, "nombre": "Juan Perez" (optional for popup)}
-                user_id = data['id']
-                user_rol = data.get('rol', 0) # Default to 0 if rol is not present
-                user_name = data.get('nombre', f"ID {user_id}") # Use name if available
+        #     if data.get('id') and data.get('id') != 0 and data.get('id') is not None: # Known person
+        #         # Expected: { "id": 1, "rol": 0, "nombre": "Juan Perez" (optional for popup)}
+        #         user_id = data['id']
+        #         user_rol = data.get('rol', 0) # Default to 0 if rol is not present
+        #         user_name = data.get('nombre', f"ID {user_id}") # Use name if available
 
-                self.guardar_asistencia_local({'id': user_id, 'rol': user_rol})
-                self.mostrar_popup_temporal("Rostro Conocido", f"Asistencia registrada para: {user_name}", 2)
-                print(f"Conocido: ID={user_id}, Rol={user_rol}")
-            else: # Unknown person or error from backend logic
-                # Expected: { "id": 0 } or { "id": null } or some other indicator
-                self.guardar_desconocido(frame, self.current_horario_id)
-                self.mostrar_popup_temporal("Rostro Desconocido", "Rostro desconocido detectado y guardado.", 2)
-                print("Desconocido detectado.")
+        #         self.guardar_asistencia_local({'id': user_id, 'rol': user_rol})
+        #         self.mostrar_popup_temporal("Rostro Conocido", f"Asistencia registrada para: {user_name}", 2)
+        #         print(f"Conocido: ID={user_id}, Rol={user_rol}")
+        #     else: # Unknown person or error from backend logic
+        #         # Expected: { "id": 0 } or { "id": null } or some other indicator
+        #         self.guardar_desconocido(frame, self.current_horario_id)
+        #         self.mostrar_popup_temporal("Rostro Desconocido", "Rostro desconocido detectado y guardado.", 2)
+        #         print("Desconocido detectado.")
 
-        except requests.exceptions.RequestException as e:
-            print(f"Error en reconocer_rostro (conexión/servidor): {e}")
-            # Optionally show an error popup to the user
-            self.mostrar_popup_temporal("Error de Red", "No se pudo conectar con el servidor de IA.", 3)
-        except ValueError as e: # Includes JSONDecodeError
-            print(f"Error en reconocer_rostro (respuesta JSON inválida): {e}")
-            self.mostrar_popup_temporal("Error de Respuesta", "Respuesta inválida del servidor de IA.", 3)
-        except Exception as e:
-            print(f"Error inesperado en reconocer_rostro: {e}")
-            self.mostrar_popup_temporal("Error Inesperado", "Ocurrió un error durante el reconocimiento.", 3)
+        # except requests.exceptions.RequestException as e:
+        #     print(f"Error en reconocer_rostro (conexión/servidor): {e}")
+        #     # Optionally show an error popup to the user
+        #     self.mostrar_popup_temporal("Error de Red", "No se pudo conectar con el servidor de IA.", 3)
+        # except ValueError as e: # Includes JSONDecodeError
+        #     print(f"Error en reconocer_rostro (respuesta JSON inválida): {e}")
+        #     self.mostrar_popup_temporal("Error de Respuesta", "Respuesta inválida del servidor de IA.", 3)
+        # except Exception as e:
+        #     print(f"Error inesperado en reconocer_rostro: {e}")
+        #     self.mostrar_popup_temporal("Error Inesperado", "Ocurrió un error durante el reconocimiento.", 3)
         
     def calcular_asistencia(self, porcentaje_asistencia):
         #[{ id: 1, hora_detectado: "12:00", rol:0}
