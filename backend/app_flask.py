@@ -4,6 +4,9 @@ from schemas import Salon, AsistenciaAlumno, AsistenciaProfesor, Horario, Descon
 from database import db
 import os
 import pandas as pd
+import cv2 # For image processing if needed, DeepFace uses it
+from deepface import DeepFace
+import tempfile # For temporarily storing the uploaded image
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -20,6 +23,10 @@ app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:root@localhost:5432/db_reconocimiento'
 
 db.init_app(app)
+
+MODEL_NAME = "Facenet" # Modelos populares: "VGG-Face", "Facenet", "Facenet512", "ArcFace", "SFace"
+DISTANCE_THRESHOLD = 0.6 # Ejemplo para Facenet. Reduce para mayor certeza.
+DETECTOR_BACKEND = 'mtcnn' # 'opencv', 'ssd', 'dlib', 'mtcnn', 'retinaface', 'mediapipe'    
 
 # sirve para consultar si el salon existe para guardar la configuracion y para consultar el horario de acuerdo al salon y devolver todos los horarios para verificar que curso se encuentra dando en este momento, esto se llama luego de que se haya guardado la configuracion y al iniciar el reconocimiento
 @app.route('/salon', methods=['POST'])
@@ -265,6 +272,137 @@ def enviar_mensaje(id_horario):
                 return jsonify({'mensaje': f"Error al enviar mensaje a {alumno.nombre} {alumno.apellido} ({alumno.codigo_universitario}): {e}"}), 400
         else:
             return jsonify({'mensaje': f"No se puede enviar mensaje a {alumno.nombre} {alumno.apellido} ({alumno.codigo_universitario}): No tiene número de teléfono registrado."}), 400
+
+@app.route('/ia/<int:id_horario>', methods=['POST'])
+def ia_recognize_face(id_horario):
+    if 'image_file' not in request.files:
+        return jsonify({"error": "No image file provided"}), 400
+
+    image_file = request.files['image_file']
+    if image_file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+
+    # 1. Guardar la imagen capturada temporalmente
+    # Usar un nombre de archivo temporal seguro
+    fd, captured_face_path = tempfile.mkstemp(suffix=".jpg")
+    os.close(fd) # Cerramos el descriptor de archivo para que save() pueda usar la ruta
+
+    try:
+        image_file.save(captured_face_path)
+        app.logger.info(f"Imagen capturada guardada en: {captured_face_path}")
+
+        # 2. Obtener usuarios (alumnos del horario, todos los profesores)
+        # Alumnos para el horario dado
+        matriculas = Matricula.query.filter_by(id_horario=id_horario).all()
+        alumnos_horario_db = [m.alumno for m in matriculas if m.alumno and m.alumno.url_img]
+
+        # Todos los profesores (asumiendo que cualquier profesor puede estar en cualquier clase)
+        profesores_todos_db = Profesor.query.filter(Profesor.url_img.isnot(None)).all()
+
+        known_faces_to_check = []
+
+        # Preparar lista de caras conocidas para este horario
+        for alumno_db in alumnos_horario_db:
+            # ASUNCIÓN: alumno_db.url_img es una ruta relativa como "students/id_123.jpg"
+            # o "students/nombre_apellido.jpg"
+            local_image_path = os.path.join(BASE_KNOWN_FACES_DIR, alumno_db.url_img)
+            if os.path.exists(local_image_path):
+                known_faces_to_check.append({
+                    "id": alumno_db.id,
+                    "rol": 0, # 0 para alumno
+                    "nombre": f"{alumno_db.nombre} {alumno_db.apellido}",
+                    "db_image_path": local_image_path
+                })
+            else:
+                app.logger.warning(f"Ruta de imagen no encontrada para alumno {alumno_db.id}: {local_image_path}")
+
+        for profesor_db in profesores_todos_db:
+            # ASUNCIÓN: profesor_db.url_img es una ruta relativa como "professors/id_abc.jpg"
+            local_image_path = os.path.join(BASE_KNOWN_FACES_DIR, profesor_db.url_img)
+            if os.path.exists(local_image_path):
+                known_faces_to_check.append({
+                    "id": profesor_db.id,
+                    "rol": 1, # 1 para profesor
+                    "nombre": f"{profesor_db.nombre} {profesor_db.apellido}",
+                    "db_image_path": local_image_path
+                })
+            else:
+                app.logger.warning(f"Ruta de imagen no encontrada para profesor {profesor_db.id}: {local_image_path}")
+
+        if not known_faces_to_check:
+            app.logger.info("No hay caras conocidas con imágenes para comparar en este horario o sistema.")
+            return jsonify({"id": 0, "message": "No hay caras conocidas con imágenes para comparar."}), 200
+
+        best_match_info = None
+        lowest_distance = float('inf')
+
+        # 3. Comparar con las caras conocidas
+        for user_data in known_faces_to_check:
+            candidate_db_image_path = user_data["db_image_path"]
+            try:
+                # enforce_detection=True: DeepFace intentará detectar caras en ambas imágenes.
+                # Si tus imágenes en BASE_KNOWN_FACES_DIR ya son caras recortadas y alineadas,
+                # podrías poner enforce_detection=False para candidate_db_image_path,
+                # o usar un detector_backend='skip' para esa parte.
+                # Para la imagen capturada (captured_face_path), es más seguro usar enforce_detection=True.
+                result = DeepFace.verify(img1_path=captured_face_path,
+                                         img2_path=candidate_db_image_path,
+                                         model_name=MODEL_NAME,
+                                         distance_metric='cosine', # o 'euclidean', 'euclidean_l2'
+                                         enforce_detection=True, # True es más seguro para la imagen capturada
+                                         detector_backend=DETECTOR_BACKEND,
+                                         align=True # Importante para la precisión
+                                        )
+
+                distance = result.get("distance", float('inf'))
+                # 'verified' de DeepFace se basa en umbrales internos del modelo,
+                # pero nosotros usaremos nuestro propio DISTANCE_THRESHOLD.
+                # verified_by_model = result.get("verified", False)
+
+                app.logger.debug(f"Comparando con {user_data['nombre']} (ID: {user_data['id']}, Rol: {user_data['rol']}) usando {candidate_db_image_path}: Distancia={distance:.4f}")
+
+                if distance < lowest_distance:
+                    lowest_distance = distance
+                    # Solo consideramos un match si está por debajo de nuestro umbral
+                    if distance < DISTANCE_THRESHOLD:
+                        best_match_info = {
+                            "id": user_data["id"],
+                            "rol": user_data["rol"],
+                            "nombre": user_data["nombre"],
+                            "distance": round(lowest_distance, 4)
+                        }
+                    # else: # Si la distancia más baja encontrada aún es muy alta, reseteamos best_match_info
+                    #     best_match_info = None # Esto asegura que solo devolvamos si está BAJO el umbral
+
+            except ValueError as ve: # DeepFace a veces tira ValueError si no encuentra cara
+                app.logger.warning(f"DeepFace ValueError con {candidate_db_image_path}: {ve}. Podría ser 'Face could not be detected...'.")
+                continue
+            except Exception as e:
+                app.logger.error(f"Error en DeepFace.verify con {candidate_db_image_path}: {e}")
+                continue
+
+        # 4. Preparar respuesta
+        if best_match_info and best_match_info["distance"] < DISTANCE_THRESHOLD : # Doble chequeo por si lowest_distance no fue actualizada a best_match_info
+            app.logger.info(f"✅ Mejor coincidencia: {best_match_info['nombre']} (ID: {best_match_info['id']}), Distancia: {best_match_info['distance']:.4f}")
+            return jsonify(best_match_info), 200
+        else:
+            app.logger.info(f"❌ No se encontró ninguna cara suficientemente similar. Distancia más baja: {lowest_distance:.4f}")
+            return jsonify({"id": 0, "message": "Persona desconocida o similitud demasiado baja."}), 200
+
+    except Exception as e:
+        app.logger.error(f"Error general en el endpoint /ia: {e}", exc_info=True)
+        return jsonify({"error": f"Ocurrió un error interno: {str(e)}"}), 500
+    finally:
+        # 5. Limpiar el archivo temporal
+        if os.path.exists(captured_face_path):
+            try:
+                os.remove(captured_face_path)
+                app.logger.info(f"Archivo temporal eliminado: {captured_face_path}")
+            except Exception as e_rm:
+                app.logger.error(f"Error eliminando archivo temporal {captured_face_path}: {e_rm}")
+
+
+# ... (tus otras rutas como /reporte, /mensaje, /usuarios) ...
 
 @app.route('/usuarios/<id_horario>', methods=['GET'])
 def obtener_usuarios(id_horario):
