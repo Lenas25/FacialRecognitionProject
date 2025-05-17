@@ -316,18 +316,71 @@ class CamaraScreen(Screen):
     
     def reconocer_rostro(self, frame):
         """
-        Lenin, necesito que hagas que esta funcion se este ejecutando cada rato y establece la logica para en que momento recibir todos los datos de la base de datos tanto usuarios como profesores ya que habra links y de esos links se va a comparar la imagen, simula un array de imagenes, el modelo debe retornar lo siguiente:
-        si es un conocido, llamar a la funcion guardar_asistencia_local
-        {
-            id: 1,
-            rol: 0, # 0 = alumno, 1 = profesor
-        }
-        si es un desconcido y llamar a la funcion guardar_desconocido y enviar la imagen para que sea guardada
-        {
-            id: 0, o null
-        }
-        
+        Envía un frame al backend para reconocimiento facial y procesa la respuesta.
+
+        :param frame: El frame de la cámara (se espera que sea un array NumPy de OpenCV).
         """
+        if frame is None:
+            self.logger.warning("FRONTEND: Se recibió un frame nulo. No se puede procesar.")
+            return
+
+        api_url = self.endpoints.get("IA")
+        if not api_url:
+            self.logger.error("FRONTEND: La URL del endpoint 'IA' no está configurada.")
+            return
+
+        try:
+            # 1. Codificar el frame a formato JPG (o PNG) para enviarlo.
+            #    DeepFace usualmente trabaja bien con JPG.
+            success, encoded_image = cv2.imencode('.jpg', frame)
+            if not success:
+                self.logger.error("FRONTEND: No se pudo codificar el frame a JPG.")
+                return
+
+            # El backend espera 'image_file' como nombre del campo del archivo.
+            files_to_send = {'image_file': ('captured_frame.jpg', encoded_image.tobytes(), 'image/jpeg')}
+
+            self.logger.info(f"FRONTEND: Enviando frame a {api_url} para reconocimiento...")
+
+            # 2. Realizar la solicitud POST al backend.
+            #    Es buena idea añadir un timeout a la solicitud.
+            response = requests.post(api_url, files=files_to_send, timeout=15) # Timeout de 15 segundos
+
+            # Verificar si la solicitud fue exitosa (códigos 2xx)
+            response.raise_for_status() # Esto lanzará una excepción para códigos 4xx/5xx
+
+            # 3. Procesar la respuesta JSON del backend.
+            datos_respuesta = response.json()
+            self.logger.info(f"FRONTEND: Respuesta recibida del backend: {datos_respuesta}")
+
+            # 4. Verificar si la persona fue clasificada.
+            if datos_respuesta.get('clasificado') is True:
+                self.logger.info(f"FRONTEND: Persona reconocida: ID={datos_respuesta.get('id')}, Rol={datos_respuesta.get('rol')}")
+                # Llamar a la función para guardar la asistencia con los datos recibidos.
+                self.guardar_asistencia_local(datos_respuesta)
+            else:
+                # Si no fue clasificado, el backend ya debería haber guardado la imagen
+                # en la carpeta de desconocidos (según la lógica del backend).
+                message = datos_respuesta.get('message', 'Persona no reconocida o similitud baja.')
+                self.logger.info(f"FRONTEND: {message} ID={datos_respuesta.get('id')}, Rol={datos_respuesta.get('rol')}")
+
+        except requests.exceptions.HTTPError as http_err:
+            # Error específico de HTTP (ej. 400, 404, 500)
+            self.logger.error(f"FRONTEND: Error HTTP al contactar el API de IA: {http_err}")
+            if http_err.response is not None:
+                self.logger.error(f"FRONTEND: Respuesta del servidor: {http_err.response.text}")
+        except requests.exceptions.ConnectionError as conn_err:
+            self.logger.error(f"FRONTEND: Error de conexión con el API de IA: {conn_err}")
+        except requests.exceptions.Timeout as timeout_err:
+            self.logger.error(f"FRONTEND: Timeout esperando respuesta del API de IA: {timeout_err}")
+        except requests.exceptions.RequestException as req_err:
+            # Otro tipo de error de la librería requests
+            self.logger.error(f"FRONTEND: Error en la solicitud al API de IA: {req_err}")
+        except ValueError as json_err: # Si response.json() falla
+            self.logger.error(f"FRONTEND: Error decodificando JSON de la respuesta del API de IA: {json_err}")
+        except Exception as e:
+            # Cualquier otra excepción inesperada
+            self.logger.error(f"FRONTEND: Ocurrió un error inesperado en reconocer_rostro: {e}", exc_info=True)
     
     def calcular_asistencia(self, minutos):
         """

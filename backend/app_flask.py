@@ -29,6 +29,12 @@ db.init_app(app)
 lista_personas = []
 
 RUTA_CARPETA_IMAGENES = 'imagenes_temporales'
+RUTA_DESCONOCIDOS_CLASE_ACTUAL = 'desconocidos_clase_actual'
+
+MODEL_NAME = "VGG-Face" # O el que estés usando: "Facenet", "Facenet512", "OpenFace", "DeepFace", "DeepID", "ArcFace", "Dlib", "SFace"
+DETECTOR_BACKEND = "opencv" # O "ssd", "dlib", "mtcnn", "retinaface", "mediapipe", "yolov8", "yunet", "fastmtcnn"
+DISTANCE_METRIC = 'cosine' # 'cosine', 'euclidean', 'euclidean_l2'
+DISTANCE_THRESHOLD = 0.40 # Umbral de distancia. Ajusta esto según tus pruebas. Para VGG-Face y cosine, 0.4 es un buen punto de partida.
 
 if not os.path.exists(RUTA_CARPETA_IMAGENES):
     os.makedirs(RUTA_CARPETA_IMAGENES)
@@ -299,134 +305,205 @@ def enviar_mensaje(id_horario):
             return jsonify({'mensaje': f"No se puede enviar mensaje a {alumno.nombre} {alumno.apellido} ({alumno.codigo_universitario}): No tiene número de teléfono registrado."}), 400
 
 
-@app.route('/ia/<int:id_horario>', methods=['POST'])
-def ia_recognize_face(id_horario):
-    pass
-    # if 'image_file' not in request.files:
-    #     return jsonify({"error": "No image file provided"}), 400
+@app.route('/ia', methods=['POST'])
+def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo mantengo si lo necesitas para otra cosa
+    if 'image_file' not in request.files:
+        return jsonify({"error": "No image file provided"}), 400
 
-    # image_file = request.files['image_file']
-    # if image_file.filename == '':
-    #     return jsonify({"error": "No selected file"}), 400
+    image_file = request.files['image_file']
+    if image_file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
 
-    # # 1. Guardar la imagen capturada temporalmente
-    # # Usar un nombre de archivo temporal seguro
-    # fd, captured_face_path = tempfile.mkstemp(suffix=".jpg")
-    # os.close(fd) # Cerramos el descriptor de archivo para que save() pueda usar la ruta
+    fd, captured_face_path = tempfile.mkstemp(suffix=".jpg")
+    os.close(fd)
 
-    # try:
-    #     image_file.save(captured_face_path)
-    #     app.logger.info(f"Imagen capturada guardada en: {captured_face_path}")
+    best_match_response = {
+        "id": "unknown",
+        "rol": "NA",
+        "clasificado": False,
+        "distance": float('inf') # Inicializar con infinito para la distancia
+    }
 
-    #     # 2. Obtener usuarios (alumnos del horario, todos los profesores)
-    #     # Alumnos para el horario dado
-    #     matriculas = Matricula.query.filter_by(id_horario=id_horario).all()
-    #     alumnos_horario_db = [m.alumno for m in matriculas if m.alumno and m.alumno.url_img]
+    try:
+        image_file.save(captured_face_path)
+        app.logger.info(f"Imagen capturada guardada temporalmente en: {captured_face_path}")
 
-    #     # Todos los profesores (asumiendo que cualquier profesor puede estar en cualquier clase)
-    #     profesores_todos_db = Profesor.query.filter(Profesor.url_img.isnot(None)).all()
+        # 1. Anti-spoofing test
+        try:
+            app.logger.info("Iniciando prueba anti-spoofing...")
+            # Nota: extract_faces puede encontrar múltiples caras.
+            # Aquí asumimos que la imagen capturada debería tener predominantemente una cara real.
+            face_objs = DeepFace.extract_faces(
+                img_path=captured_face_path,
+                detector_backend=DETECTOR_BACKEND,
+                enforce_detection=True, # Asegura que se detecte al menos una cara
+                anti_spoofing=True,
+                align=True
+            )
+            
+            if not face_objs: # No se detectaron caras
+                app.logger.warning("Anti-spoofing: No se detectaron caras en la imagen.")
+                # Si no hay caras, no podemos clasificar, pero no necesariamente es un error de spoofing
+                # Podríamos considerarlo "unknown" o un error específico.
+                # Por ahora, lo tratamos como "unknown" y se guardará en desconocidos.
+                best_match_response["message"] = "No face detected in image for anti-spoofing."
+            
+            elif not all(face_obj.get("is_real", False) for face_obj in face_objs):
+                app.logger.warning("Anti-spoofing: Se detectó una posible imagen falsa (spoof).")
+                best_match_response["message"] = "Spoof attempt detected."
+                # Para un intento de spoof, no procedemos a `DeepFace.find`
+                # y mantenemos clasificado=False.
+                # No es necesario guardarlo en RUTA_DESCONOCIDOS_CLASE_ACTUAL en este caso,
+                # a menos que quieras revisarlos específicamente.
+                return jsonify(best_match_response), 200 # O un 403 Forbidden si es más apropiado
+            else:
+                app.logger.info("Anti-spoofing: La imagen parece ser real.")
 
-    #     known_faces_to_check = []
+        except ValueError as ve: # DeepFace puede lanzar ValueError si no detecta cara
+            if "Face could not be detected" in str(ve):
+                app.logger.warning(f"Anti-spoofing: No se pudo detectar cara en la imagen: {ve}")
+                best_match_response["message"] = "No face detected in image for anti-spoofing."
+                # No se procede con find si no hay cara
+            else:
+                app.logger.error(f"Anti-spoofing: ValueError durante extract_faces: {ve}")
+                best_match_response["message"] = f"Error during anti-spoofing: {str(ve)}"
+            # En ambos casos de ValueError, no clasificamos y guardamos en desconocidos.
+            # Proceder al finally para guardar en desconocidos si es necesario.
 
-    #     # Preparar lista de caras conocidas para este horario
-    #     for alumno_db in alumnos_horario_db:
-    #         # ASUNCIÓN: alumno_db.url_img es una ruta relativa como "students/id_123.jpg"
-    #         # o "students/nombre_apellido.jpg"
-    #         local_image_path = os.path.join(BASE_KNOWN_FACES_DIR, alumno_db.url_img)
-    #         if os.path.exists(local_image_path):
-    #             known_faces_to_check.append({
-    #                 "id": alumno_db.id,
-    #                 "rol": 0, # 0 para alumno
-    #                 "nombre": f"{alumno_db.nombre} {alumno_db.apellido}",
-    #                 "db_image_path": local_image_path
-    #             })
-    #         else:
-    #             app.logger.warning(f"Ruta de imagen no encontrada para alumno {alumno_db.id}: {local_image_path}")
+        except Exception as e:
+            app.logger.error(f"Error inesperado durante anti-spoofing: {e}", exc_info=True)
+            best_match_response["message"] = f"Unexpected error during anti-spoofing: {str(e)}"
+            # No se procede con find y se guarda en desconocidos.
+        
+        # Solo proceder a DeepFace.find si el anti-spoofing fue exitoso (o no concluyente pero sin error grave)
+        # y si no hay un mensaje de error previo que indique no continuar.
+        if "message" not in best_match_response or "La imagen parece ser real." in best_match_response.get("message", ""):
+            # 2. Usar DeepFace.find para encontrar coincidencias
+            app.logger.info(f"Buscando coincidencias en: {RUTA_CARPETA_IMAGENES}")
+            if not os.path.exists(RUTA_CARPETA_IMAGENES) or not os.listdir(RUTA_CARPETA_IMAGENES):
+                app.logger.warning(f"El directorio de caras conocidas '{RUTA_CARPETA_IMAGENES}' no existe o está vacío.")
+                best_match_response["message"] = "Known faces database is empty or not found."
+            else:
+                try:
+                    # DeepFace.find devuelve una lista de DataFrames.
+                    # Si la imagen de entrada (captured_face_path) tiene múltiples caras,
+                    # habrá un DataFrame por cada cara detectada en la imagen de entrada.
+                    # Asumimos que nos interesa la primera (o única) cara detectada en la imagen de entrada.
+                    dfs = DeepFace.find(
+                        img_path=captured_face_path,
+                        db_path=RUTA_CARPETA_IMAGENES,
+                        model_name=MODEL_NAME,
+                        distance_metric=DISTANCE_METRIC,
+                        enforce_detection=True, # Asegura que se detecte cara en img_path
+                        detector_backend=DETECTOR_BACKEND,
+                        align=True,
+                        silent=True # Para menos output en consola de DeepFace
+                    )
 
-    #     for profesor_db in profesores_todos_db:
-    #         # ASUNCIÓN: profesor_db.url_img es una ruta relativa como "professors/id_abc.jpg"
-    #         local_image_path = os.path.join(BASE_KNOWN_FACES_DIR, profesor_db.url_img)
-    #         if os.path.exists(local_image_path):
-    #             known_faces_to_check.append({
-    #                 "id": profesor_db.id,
-    #                 "rol": 1, # 1 para profesor
-    #                 "nombre": f"{profesor_db.nombre} {profesor_db.apellido}",
-    #                 "db_image_path": local_image_path
-    #             })
-    #         else:
-    #             app.logger.warning(f"Ruta de imagen no encontrada para profesor {profesor_db.id}: {local_image_path}")
+                    # dfs es una lista de dataframes. Usualmente, si solo hay una cara en img_path, dfs tendrá 1 elemento.
+                    if dfs and not dfs[0].empty:
+                        # Tomamos el primer DataFrame (correspondiente a la primera cara detectada en captured_face_path)
+                        # y de ese DataFrame, la primera fila (la coincidencia más cercana)
+                        best_match_candidate_df = dfs[0]
+                        
+                        # La columna de distancia se nombra usualmente como 'model_metric', e.g., 'VGG-Face_cosine'
+                        # o puede ser simplemente 'distance' si se usa un wrapper o una versión específica.
+                        # Intentemos obtenerla dinámicamente o usar una columna conocida.
+                        # distance_col_name = f"{MODEL_NAME}_{DISTANCE_METRIC}"
+                        distance_col_name = "distance"
+                        if distance_col_name not in best_match_candidate_df.columns:
+                             # DeepFace a veces usa solo la métrica como nombre de columna si el modelo es obvio por el contexto
+                             # o si usa un nombre genérico. Hay que revisar la salida exacta.
+                             # Si no encuentra la columna específica, intentamos con 'distance' o la primera numérica después de 'identity'
+                             # Por ahora, asumimos que la columna existe o DeepFace usa un default conocido.
+                             # Si es `cosine`, `euclidean`, `euclidean_l2` y está en columnas, la tomamos.
+                            if DISTANCE_METRIC in best_match_candidate_df.columns:
+                                distance_col_name = DISTANCE_METRIC
+                            else: # Fallback a un nombre genérico si la construcción falla
+                                app.logger.warning(f"Columna de distancia '{distance_col_name}' no encontrada. Verifique las columnas: {best_match_candidate_df.columns}")
+                                # Buscamos una columna que pueda ser de distancia
+                                possible_dist_cols = [col for col in best_match_candidate_df.columns if col not in ['identity', 'target_x', 'target_y', 'target_w', 'target_h', 'source_x', 'source_y', 'source_w', 'source_h']]
+                                if possible_dist_cols:
+                                    distance_col_name = possible_dist_cols[0] # Tomar la primera como heurística
+                                    app.logger.warning(f"Usando heurística para columna de distancia: '{distance_col_name}'")
+                                else:
+                                    raise KeyError(f"No se pudo determinar la columna de distancia en el DataFrame. Cols: {best_match_candidate_df.columns}")
 
-    #     if not known_faces_to_check:
-    #         app.logger.info("No hay caras conocidas con imágenes para comparar en este horario o sistema.")
-    #         return jsonify({"id": 0, "message": "No hay caras conocidas con imágenes para comparar."}), 200
+                        # El DataFrame ya viene ordenado por distancia por DeepFace.find
+                        top_match = best_match_candidate_df.iloc[0]
+                        identity_path = top_match['identity']
+                        distance = top_match[distance_col_name]
 
-    #     best_match_info = None
-    #     lowest_distance = float('inf')
+                        app.logger.info(f"Mejor candidato encontrado: {identity_path} con distancia: {distance:.4f}")
 
-    #     # 3. Comparar con las caras conocidas
-    #     for user_data in known_faces_to_check:
-    #         candidate_db_image_path = user_data["db_image_path"]
-    #         try:
-    #             # enforce_detection=True: DeepFace intentará detectar caras en ambas imágenes.
-    #             # Si tus imágenes en BASE_KNOWN_FACES_DIR ya son caras recortadas y alineadas,
-    #             # podrías poner enforce_detection=False para candidate_db_image_path,
-    #             # o usar un detector_backend='skip' para esa parte.
-    #             # Para la imagen capturada (captured_face_path), es más seguro usar enforce_detection=True.
-    #             result = DeepFace.verify(img1_path=captured_face_path,
-    #                                      img2_path=candidate_db_image_path,
-    #                                      model_name=MODEL_NAME,
-    #                                      distance_metric='cosine', # o 'euclidean', 'euclidean_l2'
-    #                                      enforce_detection=True, # True es más seguro para la imagen capturada
-    #                                      detector_backend=DETECTOR_BACKEND,
-    #                                      align=True # Importante para la precisión
-    #                                     )
+                        if distance < DISTANCE_THRESHOLD:
+                            filename_only = os.path.basename(identity_path)
+                            user_id, user_rol = parse_identity_filename(filename_only)
 
-    #             distance = result.get("distance", float('inf'))
-    #             # 'verified' de DeepFace se basa en umbrales internos del modelo,
-    #             # pero nosotros usaremos nuestro propio DISTANCE_THRESHOLD.
-    #             # verified_by_model = result.get("verified", False)
+                            if user_id is not None and user_rol is not None:
+                                best_match_response["id"] = user_id
+                                best_match_response["rol"] = user_rol
+                                best_match_response["clasificado"] = True
+                                best_match_response["distance"] = round(float(distance), 4)
+                                app.logger.info(f"✅ Persona clasificada: ID={user_id}, Rol={user_rol}, Distancia={distance:.4f}")
+                            else:
+                                app.logger.warning(f"Formato de nombre de archivo no reconocido para {identity_path}. No se pudo extraer ID/Rol.")
+                                best_match_response["message"] = "Match found, but filename format unrecognized."
+                                best_match_response["distance"] = round(float(distance), 4) # Aún así informamos la distancia
+                        else:
+                            app.logger.info(f"❌ Coincidencia encontrada ({identity_path}) pero la distancia ({distance:.4f}) supera el umbral ({DISTANCE_THRESHOLD}).")
+                            best_match_response["message"] = "No sufficiently similar face found."
+                            best_match_response["distance"] = round(float(distance), 4)
+                    else:
+                        app.logger.info("No se encontraron coincidencias en la base de datos de caras conocidas.")
+                        best_match_response["message"] = "No matches found in known faces database."
+                
+                except ValueError as ve: # DeepFace.find puede lanzar ValueError si no detecta cara en img_path
+                    if "Face could not be detected" in str(ve) or "model instance" in str(ve).lower(): # A veces es "model instance is not built"
+                        app.logger.warning(f"DeepFace.find: No se pudo detectar cara en la imagen de entrada: {ve}")
+                        best_match_response["message"] = "Face could not be detected in the input image by find."
+                    else:
+                        app.logger.error(f"DeepFace.find: ValueError: {ve}", exc_info=True)
+                        best_match_response["message"] = f"Error during face finding: {str(ve)}"
+                except Exception as e:
+                    app.logger.error(f"Error durante DeepFace.find: {e}", exc_info=True)
+                    best_match_response["message"] = f"An unexpected error occurred during face finding: {str(e)}"
 
-    #             app.logger.debug(f"Comparando con {user_data['nombre']} (ID: {user_data['id']}, Rol: {user_data['rol']}) usando {candidate_db_image_path}: Distancia={distance:.4f}")
+        # 3. Si no se clasificó, guardar la imagen en la carpeta de desconocidos
+        if not best_match_response["clasificado"]:
+            try:
+                os.makedirs(RUTA_DESCONOCIDOS_CLASE_ACTUAL, exist_ok=True)
+                # Usar un nombre único para la imagen guardada
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                unknown_filename = f"unknown_{timestamp}.jpg"
+                destination_path = os.path.join(RUTA_DESCONOCIDOS_CLASE_ACTUAL, unknown_filename)
+                shutil.copy(captured_face_path, destination_path)
+                app.logger.info(f"Imagen no clasificada guardada en: {destination_path}")
+                if "message" not in best_match_response: # Si no hay un mensaje más específico
+                    best_match_response["message"] = "Face not recognized or spoof attempt."
+                best_match_response["saved_unknown_path"] = destination_path # Opcional: informar dónde se guardó
+            except Exception as e_save:
+                app.logger.error(f"Error guardando imagen desconocida: {e_save}", exc_info=True)
 
-    #             if distance < lowest_distance:
-    #                 lowest_distance = distance
-    #                 # Solo consideramos un match si está por debajo de nuestro umbral
-    #                 if distance < DISTANCE_THRESHOLD:
-    #                     best_match_info = {
-    #                         "id": user_data["id"],
-    #                         "rol": user_data["rol"],
-    #                         "nombre": user_data["nombre"],
-    #                         "distance": round(lowest_distance, 4)
-    #                     }
-    #                 # else: # Si la distancia más baja encontrada aún es muy alta, reseteamos best_match_info
-    #                 #     best_match_info = None # Esto asegura que solo devolvamos si está BAJO el umbral
+        # Si hay un mensaje pero no distancia (porque no se llegó a find), quitar la distancia infinita
+        if best_match_response["distance"] == float('inf') and "message" in best_match_response:
+             del best_match_response["distance"]
 
-    #         except ValueError as ve: # DeepFace a veces tira ValueError si no encuentra cara
-    #             app.logger.warning(f"DeepFace ValueError con {candidate_db_image_path}: {ve}. Podría ser 'Face could not be detected...'.")
-    #             continue
-    #         except Exception as e:
-    #             app.logger.error(f"Error en DeepFace.verify con {candidate_db_image_path}: {e}")
-    #             continue
 
-    #     # 4. Preparar respuesta
-    #     if best_match_info and best_match_info["distance"] < DISTANCE_THRESHOLD : # Doble chequeo por si lowest_distance no fue actualizada a best_match_info
-    #         app.logger.info(f"✅ Mejor coincidencia: {best_match_info['nombre']} (ID: {best_match_info['id']}), Distancia: {best_match_info['distance']:.4f}")
-    #         return jsonify(best_match_info), 200
-    #     else:
-    #         app.logger.info(f"❌ No se encontró ninguna cara suficientemente similar. Distancia más baja: {lowest_distance:.4f}")
-    #         return jsonify({"id": 0, "message": "Persona desconocida o similitud demasiado baja."}), 200
+        return jsonify(best_match_response), 200
 
-    # except Exception as e:
-    #     app.logger.error(f"Error general en el endpoint /ia: {e}", exc_info=True)
-    #     return jsonify({"error": f"Ocurrió un error interno: {str(e)}"}), 500
-    # finally:
-    #     # 5. Limpiar el archivo temporal
-    #     if os.path.exists(captured_face_path):
-    #         try:
-    #             os.remove(captured_face_path)
-    #             app.logger.info(f"Archivo temporal eliminado: {captured_face_path}")
-    #         except Exception as e_rm:
-    #             app.logger.error(f"Error eliminando archivo temporal {captured_face_path}: {e_rm}")
+    except Exception as e:
+        app.logger.error(f"Error general en el endpoint /ia: {e}", exc_info=True)
+        return jsonify({"error": f"Ocurrió un error interno: {str(e)}", "clasificado": False}), 500
+    finally:
+        # 4. Limpiar el archivo temporal
+        if os.path.exists(captured_face_path):
+            try:
+                os.remove(captured_face_path)
+                app.logger.info(f"Archivo temporal eliminado: {captured_face_path}")
+            except Exception as e_rm:
+                app.logger.error(f"Error eliminando archivo temporal {captured_face_path}: {e_rm}")
+
 
 def descargar_imagen(url, nombre_archivo):
     """
@@ -512,6 +589,8 @@ def obtener_usuarios(id_horario):
         return jsonify({'mensaje': f'Error al obtener usuarios: {str(e)}'}), 500
 
 if __name__ == '__main__':
+    import logging
+    logging.basicConfig(level=logging.DEBUG) # Cambiar a INFO para menos verbosidad
     app.run(debug=True)
 
     with app.app_context():
