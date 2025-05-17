@@ -446,7 +446,7 @@ def descargar_imagen(url, nombre_archivo):
         print(f"Error al descargar la imagen {url}: {e}")
         return False
 
-def descargar_imagenes_concurrente(lista_alumnos):
+def descargar_imagenes_concurrente(lista_personas):
     """
     Descarga las imágenes de los alumnos de forma concurrente usando un ThreadPoolExecutor.
     """
@@ -454,13 +454,13 @@ def descargar_imagenes_concurrente(lista_alumnos):
     # Limita el número de hilos para no saturar el sistema
     with ThreadPoolExecutor(max_workers=5) as executor:
         futures = []
-        for alumno in lista_alumnos:
+        for persona in lista_personas:
             # Obtén la URL de la imagen, maneja el caso de que no exista
-            url_imagen = alumno.get('url_img', '')
+            url_imagen = persona.get('url_img', '')
             if url_imagen:
                 nombre_archivo = os.path.join(
                     # Usa .jpg
-                    RUTA_CARPETA_IMAGENES, f"alumno_{alumno['id']}.jpg")
+                    RUTA_CARPETA_IMAGENES, f"persona_{persona['id']}_tipo_{persona["tipo"]}.jpg")
                 futures.append(executor.submit(
                     descargar_imagen, url_imagen, nombre_archivo))
 
