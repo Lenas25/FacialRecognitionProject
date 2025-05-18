@@ -14,6 +14,8 @@ from email.mime.base import MIMEBase
 from email import encoders
 from twilio.rest import Client
 import datetime
+import os
+import re # For a more robust parsing
 from dotenv import load_dotenv
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor  # Para descarga concurrente
@@ -44,6 +46,66 @@ MODEL_NAME = "Facenet"
 DISTANCE_THRESHOLD = 0.6  # Ejemplo para Facenet. Reduce para mayor certeza.
 # 'opencv', 'ssd', 'dlib', 'mtcnn', 'retinaface', 'mediapipe'
 DETECTOR_BACKEND = 'mtcnn'
+
+
+# ... (other imports)
+
+def parse_identity_filename(filename):
+    """
+    Parses a filename to extract user ID and role.
+    Expected format: "persona_{id}_tipo_{tipo}.jpg"
+    Returns (user_id, user_rol) or (None, None) if parsing fails.
+    """
+    # Example: "persona_123_tipo_0.jpg"
+    #          "persona_45_tipo_1.png" (extension might vary, handle it)
+    
+    base_name = os.path.splitext(filename)[0] # Remove extension (e.g., .jpg, .png)
+    parts = base_name.split('_')
+
+    # Expected structure: ["persona", "{id}", "tipo", "{tipo_num}"]
+    if len(parts) == 4 and parts[0] == "persona" and parts[2] == "tipo":
+        try:
+            user_id = int(parts[1])
+            tipo_num = int(parts[3])
+
+            if tipo_num == 0:
+                user_rol = "alumno"
+            elif tipo_num == 1:
+                user_rol = "profesor"
+            else:
+                app.logger.warning(f"Tipo desconocido '{tipo_num}' en el nombre de archivo: {filename}")
+                return None, None
+            
+            return str(user_id), user_rol # Return ID as string to match "id" field type in response
+        except ValueError:
+            app.logger.error(f"Error al parsear ID o tipo de '{filename}'. No son números válidos.")
+            return None, None
+    else:
+        # Alternative more robust parsing using regex, handles variations better
+        # e.g. persona_123_tipo_0.jpg, persona_123_tipo_0_extra_info.jpg
+        match = re.match(r"persona_(\d+)_tipo_([01])(?:_.*)?", base_name)
+        if match:
+            try:
+                user_id = str(match.group(1)) # Keep as string
+                tipo_num = int(match.group(2))
+
+                if tipo_num == 0:
+                    user_rol = "alumno"
+                elif tipo_num == 1:
+                    user_rol = "profesor"
+                else: # Should not happen due to regex [01]
+                    app.logger.warning(f"Tipo desconocido '{tipo_num}' en el nombre de archivo (regex): {filename}")
+                    return None, None
+                
+                return user_id, user_rol
+            except Exception as e:
+                app.logger.error(f"Error al parsear con regex ID o tipo de '{filename}': {e}")
+                return None, None
+
+        app.logger.warning(f"Formato de nombre de archivo no reconocido: {filename}. No se pudo extraer ID/Rol.")
+        return None, None
+
+# ... (rest of your Flask app code)
 
 # sirve para consultar si el salon existe para guardar la configuracion y para consultar el horario de acuerdo al salon y devolver todos los horarios para verificar que curso se encuentra dando en este momento, esto se llama luego de que se haya guardado la configuracion y al iniciar el reconocimiento
 @app.route('/salon', methods=['POST'])
