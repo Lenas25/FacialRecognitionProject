@@ -26,6 +26,7 @@ from dotenv import load_dotenv
 import cloudinary
 import cloudinary.uploader
 from cloudinary.utils import cloudinary_url
+import time
 
 load_dotenv()
 
@@ -43,10 +44,11 @@ class InicioSesionScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.app = App.get_running_app()
-        self.storage = JsonStore('local.json')
-
+        
     # Esta funcion se ejecuta cuando se da click en el boton de guardar, y tambien en local guarda el salon y el horario actual
     def validar_y_abrir_camara(self):
+        self.storage = JsonStore('local.json')
+        
         salon_ingresado = self.ids.salon_input.text.strip()
         codigo_ingresado = self.ids.codigo_admin_input.text.strip()
 
@@ -108,6 +110,8 @@ class InicioSesionScreen(Screen):
         return dias_espanol.get(dia_ingles, 'Día no reconocido')
 
     def actualizar_horario_dia(self):
+        self.storage = JsonStore('local.json')
+
         dia_semana = self.obtener_dia_semana()
         horarios = self.storage.get('horario')['horario']['horarios']
         horarios_dia = [horario for horario in horarios if horario['dia_semana'] == dia_semana]
@@ -125,10 +129,8 @@ class CamaraScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.app = App.get_running_app()
-        self.storage = JsonStore('local.json')
-        self.storage_asistencia = JsonStore('asistencia.json')
         self.asistencias = []
-        self.detectar_rostro = True
+        self.detectar_rostro = False
         self.orientation = 'horizontal'
         self.padding = dp(10)
         self.spacing = dp(10)
@@ -145,8 +147,8 @@ class CamaraScreen(Screen):
         self.layout_botones_imagen.add_widget(self.camera_image)
 
         self.add_widget(self.layout_botones_imagen)
-        Clock.schedule_interval(self.actualizar_hora, 1)
         self.ultimo_minuto_verificado = -1
+        Clock.schedule_interval(self.actualizar_hora, 1)
 
         self.model_path = hf_hub_download(repo_id="arnabdhar/YOLOv8-Face-Detection", filename="model.pt")
         self.yolo_model = YOLO(self.model_path)
@@ -216,13 +218,16 @@ class CamaraScreen(Screen):
                 varianza_laplace = self.calcular_varianza_laplace(frame_rgb) #calcula nitidez
 
                 if self.detectar_rostro and self.detectar_cara_centrada(frame_rgb) and varianza_laplace > self.varianza_laplace_minima:
+                    print("Cara centrada y nítida detectada. Enviando a reconocimiento...")
                     # La detección de rostro está activa, la cara está centrada y la imagen es nítida
                     # Aquí se llamaría a la función de reconocimiento facial
-                    persona = self.reconocer_rostro(frame_rgb)
-                    self.reconocer_rostro(persona)
-                    print("Cara centrada y nítida detectada. Enviando a reconocimiento...")
-                    
-
+                    datos = self.reconocer_rostro(frame_rgb)
+                    # self.reconocer_rostro(persona)
+                    if datos: # Verifica que se haya retornado algo válido
+                        self.detectar_rostro = False # Desactiva la detección de rostro para evitar múltiples detecciones
+                        title = "Resultado"
+                        content= datos.get('message')
+                        self.mostrar_popup(title, content) # Muestra el popup con la información
                 buf = cv2.flip(frame_rgb, -1).tobytes()
                 image_texture = Texture.create(size=(frame.shape[1], frame.shape[0]), colorfmt='rgb')
                 image_texture.blit_buffer(buf, bufferfmt='ubyte')
@@ -244,12 +249,15 @@ class CamaraScreen(Screen):
         minuto_actual = now.minute
 
         if minuto_actual != self.ultimo_minuto_verificado:
+            print("NUEVO MINUTO DETECTADO:", current_time_str)
             self.verificar_horario(now, 5, 5)
             self.ultimo_minuto_verificado = minuto_actual
 
     # esta funcion verifica si la hora actual se encuentra en el rango de horario del dia de hoy, si es asi se activa la deteccion de rostro, si no y esta en la final de hora se envia el reporte de la clase y se guarda la asistencia calculada por local
-    def verificar_horario(self, hora_actual, minutos_antes=5, minutos_despues=5):
-        # hora actual 15:30
+    def verificar_horario(self, hora_actual, minutos_antes=4, minutos_despues=4):
+        self.storage = JsonStore('local.json')
+        self.storage_asistencia = JsonStore('asistencia.json')
+        
         horarios_hoy = self.storage.get('horario_dia')['horario_dia']
         for horario in horarios_hoy:
             hora_inicio_str = horario["hora_inicio"]
@@ -269,26 +277,28 @@ class CamaraScreen(Screen):
             hora_fin_dt = datetime.datetime.combine(fecha_hoy, hora_fin)
             hora_antes = (hora_inicio_dt - datetime.timedelta(minutes=minutos_antes)).strftime("%H:%M:%S")
             hora_despues = (hora_fin_dt + datetime.timedelta(minutes=minutos_despues)).strftime("%H:%M:%S")
+            print("SE VERIFICA")
             # si la hora actual esta entre ese rango entonces sigue detectando rostros
-            print(f"Verificando horario: {horario['id']} de {hora_antes} a {hora_despues}")
-            self.actualizar_lista_alumnos(horario['id'])
-            # if hora_actual.strftime("%H:%M:%S") == hora_antes:
-            #     self.actualizar_lista_alumnos(horario['id'])
-            #     self.detectar_rostro = True
-            #     print("Inicio nuevo curso, enviando lista de alumnos...")
-            # elif hora_actual.strftime("%H:%M:%S") > hora_antes and hora_actual.strftime("%H:%M:%S") < hora_despues:
-            #     self.detectar_rostro = True
-            #     print("En el rando, detectando rostro...")
-            #     break
-            # elif hora_actual.strftime("%H:%M:%S") == hora_despues:
-            #     self.detectar_rostro = False
-            #     self.guardar_asistencia(horario['id'])
-            #     self.enviar_reporte(horario['id'])
-            #     self.storage_asistencia.put("asistencia", asistencia=[])
-            #     self.eliminar_imagenes()
-            #     print("Fuera del rango, guardando asistencia y enviando reporte...")
-            #     break
-            self.detectar_rostro = True
+            print(f"Verificando horario {hora_actual}: {horario['id']} de {hora_antes} a {hora_despues}")
+            if hora_actual.strftime("%H:%M:%S") == hora_antes:
+                self.actualizar_lista_alumnos(horario['id'])
+                self.detectar_rostro = True
+                print("Inicio nuevo curso, enviando lista de alumnos...")
+                break
+            elif hora_actual.strftime("%H:%M:%S") > hora_antes and hora_actual.strftime("%H:%M:%S") < hora_despues:
+                self.detectar_rostro = True
+                print("En el rango, detectando rostro...")
+                break
+            elif hora_actual.strftime("%H:%M:%S") == hora_despues:
+                self.detectar_rostro = False
+                print("Fuera del rango, guardando asistencia y enviando reporte...")
+                self.guardar_asistencia(horario['id'])
+                self.guardar_desconocidos(horario['id'])
+                self.enviar_reporte(horario['id'])
+                self.mostrar_popup("Reporte", "Reporte enviado y asistencia guardada.", type="reporte")
+                self.eliminar_imagenes()
+                self.storage_asistencia.clear()
+                break
     
     def actualizar_lista_alumnos(self, id_horario):
         response = requests.get(f'{endpoints["usuarios"]}/{id_horario}')
@@ -303,15 +313,21 @@ class CamaraScreen(Screen):
         """
         Elimina las imágenes de la carpeta de imágenes temporales.
         """
-        folder_path = 'imagenes_temporales'
-        if os.path.exists(folder_path):
-            for filename in os.listdir(folder_path):
-                file_path = os.path.join(folder_path, filename)
-                try:
-                    os.remove(file_path)
-                    print(f"Archivo eliminado: {file_path}")
-                except Exception as e:
-                    print(f"Error al eliminar el archivo {file_path}: {e}")
+        folder_path = [
+            "imagenes_temporales",
+            "desconocidos_clase_actual"
+        ]
+        for folder in folder_path:
+            if os.path.exists(folder):
+                for filename in os.listdir(folder):
+                    # Solo eliminar archivos .png o .jpg (mayúsculas o minúsculas)
+                    if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                        file_path = os.path.join(folder, filename)
+                        try:
+                            os.remove(file_path)
+                            print(f"Archivo eliminado: {file_path}")
+                        except Exception as e:
+                            print(f"Error al eliminar el archivo {file_path}: {e}")
     
     def reconocer_rostro(self, frame):
         """
@@ -357,11 +373,14 @@ class CamaraScreen(Screen):
                 print(f"FRONTEND: Persona reconocida: ID={datos_respuesta.get('id')}, Rol={datos_respuesta.get('rol')}")
                 # Llamar a la función para guardar la asistencia con los datos recibidos.
                 self.guardar_asistencia_local(datos_respuesta)
+                return datos_respuesta
             else:
                 # Si no fue clasificado, el backend ya debería haber guardado la imagen
                 # en la carpeta de desconocidos (según la lógica del backend).
                 message = datos_respuesta.get('message', 'Persona no reconocida o similitud baja.')
                 print(f"FRONTEND: {message} ID={datos_respuesta.get('id')}, Rol={datos_respuesta.get('rol')}")
+                return datos_respuesta
+                
 
         except requests.exceptions.HTTPError as http_err:
             # Error específico de HTTP (ej. 400, 404, 500)
@@ -382,10 +401,15 @@ class CamaraScreen(Screen):
             print(f"FRONTEND: Ocurrió un error inesperado en reconocer_rostro: {e}")
     
     def calcular_asistencia(self, minutos):
+        self.storage_asistencia = JsonStore('asistencia.json')
         """
         Calcula el tiempo de asistencia de cada usuario (estudiante o profesor)
         basándose en una lista de registros de entrada y salida.
         """
+        print("Calculando asistencia...")
+        if not self.storage_asistencia.exists("asistencia"):
+            print("No hay registros de asistencia para calcular.")
+            return []
         tiempos_por_usuario = {}
         for registro in self.storage_asistencia.get("asistencia")["asistencia"]:
             usuario_id = registro['id']
@@ -413,7 +437,7 @@ class CamaraScreen(Screen):
                     'id': usuario_id,
                     'tiempo': round(datos['tiempo_total']),  # Redondear a minutos enteros
                     'estado': 'presente' if datos['tiempo_total'] >= minutos else 'ausente',
-                    'rol': datos['rol'],
+                    'rol': 0 if datos['rol'] == "alumno" else 1  # Asignar rol como string
                 })
             # Manejar el caso de un registro de entrada sin salida (usuario ausente)
             elif datos['ingreso'] is not None:
@@ -421,22 +445,27 @@ class CamaraScreen(Screen):
                     'id': usuario_id,
                     'tiempo': 0,  # Tiempo de asistencia 0 si solo hay entrada
                     'estado': 'ausente',
-                    'rol': datos['rol']
+                    'rol': 0 if datos['rol'] == "alumno" else 1  # Asignar rol como string
                 })
         return resultado
 
     # esta funcion guarda la asistencia de varios usuarios en la base de datos, recibe el id del horario y envia los datos calculados por calcular_asistencia
     def guardar_asistencia(self, id_horario):
-        datos = self.calcular_asistencia(30)
+        self.storage_asistencia = JsonStore('asistencia.json')
+        
+        datos = self.calcular_asistencia(2)
+        print(f"Guardando asistencia para el horario {id_horario} con los siguientes datos: {datos}")
         response = requests.post(f'{endpoints["asistencia"]}/{id_horario}', json=datos)
         if response.status_code == 200:
-            self.storage_asistencia.clear()
+            # self.storage_asistencia.clear()
             print("Asistencia guardada correctamente")
         else:
-            print(f"Error al guardar asistencia: {response.json()}")
+            print(f"Error al guardar asistencia: {response}")
 
     # esta funcion se ejecuta cuando se detecta un rostro conocido, guarda la asistencia localmente y se va acumulando hasta que se finalice la clase
     def guardar_asistencia_local(self, datos):
+        self.storage_asistencia = JsonStore('asistencia.json')
+        
         # de datos se recibe solo la id y el rol
         datos["hora_detectado"] = datetime.datetime.now().strftime("%H:%M:%S")
         self.asistencias = self.storage_asistencia.get("asistencia")["asistencia"] if self.storage_asistencia.exists("asistencia") else []
@@ -445,6 +474,8 @@ class CamaraScreen(Screen):
     
     # esta funcion se encarga de enviar el reporte y el mensaje al servidor, recibe el id del horario y envia el reporte y mensaje
     def enviar_reporte(self, id_horario):
+        self.storage = JsonStore('local.json')
+        
         # se ejecuta e enviar reporte y mensaje en el mismo
         try:
             response = requests.post(f'{endpoints["reporte"]}/{self.storage.get("salon")["salon"]}/{id_horario}')
@@ -467,29 +498,44 @@ class CamaraScreen(Screen):
             print(f"Error al enviar el mensaje: {e}")
     
     # esta funcion se encarga de guardar un desconocido, recibe el frame de la imagen y el id del horario, lo convierte a imagen, lo guarda en Cloudinary y guarda el link en la base de datos   
-    def guardar_desconocido(self, frame, id_horario):
+    def guardar_desconocidos(self, id_horario):
         try:
-            _, img_encoded = cv2.imencode('.jpg', frame) 
-            img_bytes = img_encoded.tobytes() 
+            folder = "desconocidos_clase_actual"
+            urls = []
 
-            upload_result = cloudinary.uploader.upload(img_bytes, resource_type="image") 
+            # Recorre todos los archivos de imagen en el directorio
+            for filename in os.listdir(folder):
+                if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    file_path = os.path.join(folder, filename)
+                    # Lee la imagen y súbela a Cloudinary
+                    with open(file_path, "rb") as img_file:
+                        upload_result = cloudinary.uploader.upload(img_file, resource_type="image")
+                        imagen_url = upload_result['secure_url']
+                        urls.append(imagen_url)
+                        print(f"Imagen subida a Cloudinary: {imagen_url}")
 
-            imagen_url = upload_result['secure_url']
-            print(f"Imagen subida a Cloudinary: {imagen_url}")
-            response = requests.post(f'{endpoints["desconocido"]}/{id_horario}', json={"url_img": imagen_url})
-            if response.status_code == 200:
-                return jsonify({'mensaje': 'Desconocido guardado correctamente'}), 200
+            # Envía la lista de URLs al backend
+            if urls:
+                response = requests.post(
+                    f'{endpoints["desconocido"]}/{id_horario}',
+                    json={"url_img": urls}
+                )
+                if response.status_code == 200:
+                    print('Desconocidos guardados correctamente')
+                else:
+                    print('Error al guardar desconocidos')
             else:
-                return jsonify({'mensaje': 'Error al guardar desconocido'}), 500
-            
+                print("No se encontraron imágenes para subir.")
+
         except Exception as e:
-            return jsonify({'mensaje': f'Error al guardar desconocido: {str(e)}'}), 500
+            print(f'Error al guardar desconocidos: {str(e)}')
     
     def on_stop(self):
+        self.storage_asistencia = JsonStore('asistencia.json')
         self.storage_asistencia.close()
     
     # esta funcion servira cuando se se detectte se mostrara un pop up pero por 2 segundos y se mostrara el mensaje de que se ha detectado un rostro conocido o desconocido
-    def mostrar_popup(self, title, content):
+    def mostrar_popup(self, title, content, type='rostro'):
         popup = Popup(
         title=title,
         size_hint=(0.8, 0.4),
@@ -507,11 +553,19 @@ class CamaraScreen(Screen):
         box.add_widget(close_button)
         popup.content = box
         popup.open()
+        
+        def cerrar_popup_y_reactivar(dt):
+            popup.dismiss()
+            if type != "reporte":
+                self.detectar_rostro = True
+
+        Clock.schedule_once(cerrar_popup_y_reactivar, 5)
     
 class ReconocimientoFacialApp(App):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.storage = JsonStore('local.json')
+        self.storage_asistencia = JsonStore('asistencia.json')
     
     def build(self):
         Builder.load_file('frontend/main.kv')
@@ -555,6 +609,7 @@ class ReconocimientoFacialApp(App):
         horarios = self.storage.get('horario')['horario']['horarios']
         horarios_dia = [horario for horario in horarios if horario['dia_semana'] == dia_semana]
         self.storage.put('horario_dia',horario_dia = horarios_dia)
+        print("SE ACTUALIZO EL HORARIO DEL DIA", horarios_dia)
     
     def on_stop(self):
         self.storage.close()

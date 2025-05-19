@@ -19,7 +19,8 @@ import os
 import re # For a more robust parsing
 from dotenv import load_dotenv
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor  # Para descarga concurrente
+from concurrent.futures import ThreadPoolExecutor  # Para descarga concurrent
+import asyncio
 
 load_dotenv()
 
@@ -151,7 +152,7 @@ def obtener_salones():
 #         "estado": "A"/"F"
 #     }
 @app.route('/asistencia/<id_horario>', methods=['POST'])
-def registrar_asistencia(id_horario):
+async def registrar_asistencia(id_horario):
     data = request.get_json()
 
     if not data:
@@ -165,15 +166,15 @@ def registrar_asistencia(id_horario):
     new_asistencias_profesores = []
     # si es alumno 0 y si es profesor 1
     for item in data:
-        fecha = datetime.strptime(item["fecha"], '%Y-%m-%d').date()
-        if item['tipo'] == 0:
+        fecha = datetime.datetime.now().strftime('%Y-%m-%d')
+        if item['rol'] == 0:
             new_asistencias_alumnos.append(AsistenciaAlumno(
                 id_horario=id_horario,
                 id_alumno=item['id'],
                 fecha=fecha,
                 estado=item['estado'],
             ))
-        elif item['tipo'] == 1:
+        elif item['rol'] == 1:
             new_asistencias_profesores.append(AsistenciaProfesor(
                 id_horario=id_horario,
                 id_profesor=item['id'],
@@ -191,38 +192,37 @@ def registrar_asistencia(id_horario):
 
 # registrar la imagen de un desconocido en la base de datos considerando la fecha de registro
 @app.route('/desconocido/<id_horario>', methods=['POST'])
-def registrar_desconocido(id_horario):
-    # se recibe en el formato {
-    # "id_horario":11,
-    # "url_imagen":"",
-    # }
-
+async def registrar_desconocido(id_horario):
+    # recibe un array de url_img
     data = request.get_json()
-    print(data)
     if not data:
         return jsonify({"message": "Es necesario información."}), 400
 
     horario = Horario.query.filter_by(id=id_horario).first()
     if not horario:
         return jsonify({"message": "Horario no encontrado."}), 404
+    
+    new_desconocidos = []
 
-    new_desconocido = Desconocido(
-        id_horario=id_horario,
-        url_img=data['url_img'],
-        fecha=datetime.datetime.now().strftime("%Y-%m-%d"),
-    )
+    for url in data["url_img"]:
+        new_desconocidos.append(Desconocido(
+            id_horario=id_horario,
+            url_img=url,
+            fecha=datetime.datetime.now().strftime("%Y-%m-%d"),
+            )
+        )
 
     try:
-        db.session.add(new_desconocido)
+        db.session.add_all(new_desconocidos)
         db.session.commit()
-        return jsonify({'message': 'Desconocido agregado exitosamente'}), 201
+        return jsonify({'message': 'Desconocido agregado exitosamente'}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': f'Error al insertar el desconocido: {str(e)}'}), 500
 
 # exportar la asistencia en un excel con la lista de alumnos y profesores, y la lista de desconocidos
 @app.route('/reporte/<salon>/<id_horario>', methods=['POST'])
-def enviar_reporte(salon, id_horario):
+async def enviar_reporte(salon, id_horario):
 
     EMAIL_ADDRESS = os.getenv('EMAIL_ADDRESS')
     EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')
@@ -321,7 +321,7 @@ def enviar_reporte(salon, id_horario):
 
 # enviar mensaje a contactos de quienes tienen una falta en su asistencia
 @app.route('/mensaje/<id_horario>', methods=['POST'])
-def enviar_mensaje(id_horario):
+async def enviar_mensaje(id_horario):
     TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID')
     TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN')
     TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER')
@@ -333,7 +333,10 @@ def enviar_mensaje(id_horario):
     cliente = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
     alumnos_ausentes = AsistenciaAlumno.query.filter(
-        AsistenciaAlumno.id_horario == id_horario, AsistenciaAlumno.estado == 'ausente').all()
+        AsistenciaAlumno.id_horario == id_horario, 
+        AsistenciaAlumno.estado == 'ausente',
+        AsistenciaAlumno.fecha == datetime.datetime.now().date()
+        ).all()
     for alumno_ausente in alumnos_ausentes:
         alumno = alumno_ausente.alumno
         if alumno.contacto:
@@ -352,7 +355,7 @@ def enviar_mensaje(id_horario):
 
 
 @app.route('/ia', methods=['POST'])
-def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo mantengo si lo necesitas para otra cosa
+async def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo mantengo si lo necesitas para otra cosa
     if 'image_file' not in request.files:
         return jsonify({"error": "No image file provided"}), 400
 
@@ -392,29 +395,27 @@ def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo mante
                 # Si no hay caras, no podemos clasificar, pero no necesariamente es un error de spoofing
                 # Podríamos considerarlo "unknown" o un error específico.
                 # Por ahora, lo tratamos como "unknown" y se guardará en desconocidos.
-                best_match_response["message"] = "No face detected in image for anti-spoofing."
+                best_match_response["message"] = "No se detectó ninguna cara real."
             
             elif not all(face_obj.get("is_real", False) for face_obj in face_objs):
                 app.logger.warning("Anti-spoofing: Se detectó una posible imagen falsa (spoof).")
-                best_match_response["message"] = "Spoof attempt detected."
+                best_match_response["message"] = "La imagen parece ser un intento de spoofing (falsa)."
                 # Para un intento de spoof, no procedemos a `DeepFace.find`
-                # y mantenemos clasificado=False.
-                # No es necesario guardarlo en RUTA_DESCONOCIDOS_CLASE_ACTUAL en este caso,
-                # a menos que quieras revisarlos específicamente.
                 return jsonify(best_match_response), 200 # O un 403 Forbidden si es más apropiado
             else:
                 app.logger.info("Anti-spoofing: La imagen parece ser real.")
+                best_match_response["message"] = "La imagen parece ser real."
 
         except ValueError as ve: # DeepFace puede lanzar ValueError si no detecta cara
             if "Face could not be detected" in str(ve):
                 app.logger.warning(f"Anti-spoofing: No se pudo detectar cara en la imagen: {ve}")
-                best_match_response["message"] = "No face detected in image for anti-spoofing."
+                best_match_response["message"] = "No se pudo detectar el rostro correctamente"
                 # No se procede con find si no hay cara
             else:
                 app.logger.error(f"Anti-spoofing: ValueError durante extract_faces: {ve}")
                 best_match_response["message"] = f"Error during anti-spoofing: {str(ve)}"
-            # En ambos casos de ValueError, no clasificamos y guardamos en desconocidos.
-            # Proceder al finally para guardar en desconocidos si es necesario.
+            
+            return jsonify(best_match_response), 400 # O un 403 Forbidden si es más apropiado
 
         except Exception as e:
             app.logger.error(f"Error inesperado durante anti-spoofing: {e}", exc_info=True)
@@ -428,7 +429,7 @@ def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo mante
             app.logger.info(f"Buscando coincidencias en: {RUTA_CARPETA_IMAGENES}")
             if not os.path.exists(RUTA_CARPETA_IMAGENES) or not os.listdir(RUTA_CARPETA_IMAGENES):
                 app.logger.warning(f"El directorio de caras conocidas '{RUTA_CARPETA_IMAGENES}' no existe o está vacío.")
-                best_match_response["message"] = "Known faces database is empty or not found."
+                best_match_response["message"] = "La base de datos de caras conocidas está vacía o no se encuentra."
             else:
                 try:
                     # DeepFace.find devuelve una lista de DataFrames.
@@ -492,17 +493,18 @@ def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo mante
                                 best_match_response["clasificado"] = True
                                 best_match_response["distance"] = round(float(distance), 4)
                                 app.logger.info(f"✅ Persona clasificada: ID={user_id}, Rol={user_rol}, Distancia={distance:.4f}")
+                                best_match_response["message"] = "Se identifico correctamente al usuario."
                             else:
                                 app.logger.warning(f"Formato de nombre de archivo no reconocido para {identity_path}. No se pudo extraer ID/Rol.")
-                                best_match_response["message"] = "Match found, but filename format unrecognized."
+                                best_match_response["message"] = "No se reconoce al usuario."
                                 best_match_response["distance"] = round(float(distance), 4) # Aún así informamos la distancia
                         else:
                             app.logger.info(f"❌ Coincidencia encontrada ({identity_path}) pero la distancia ({distance:.4f}) supera el umbral ({DISTANCE_THRESHOLD}).")
-                            best_match_response["message"] = "No sufficiently similar face found."
+                            best_match_response["message"] = "Vuelve a intentar, por favor."
                             best_match_response["distance"] = round(float(distance), 4)
                     else:
                         app.logger.info("No se encontraron coincidencias en la base de datos de caras conocidas.")
-                        best_match_response["message"] = "No matches found in known faces database."
+                        best_match_response["message"] = "No se encontro al usuario (posible desconocido)."
                 
                 except ValueError as ve: # DeepFace.find puede lanzar ValueError si no detecta cara en img_path
                     if "Face could not be detected" in str(ve) or "model instance" in str(ve).lower(): # A veces es "model instance is not built"
@@ -526,7 +528,7 @@ def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo mante
                 shutil.copy(captured_face_path, destination_path)
                 app.logger.info(f"Imagen no clasificada guardada en: {destination_path}")
                 if "message" not in best_match_response: # Si no hay un mensaje más específico
-                    best_match_response["message"] = "Face not recognized or spoof attempt."
+                    best_match_response["message"] = "Es un desconocido, imagen guardada."
                 best_match_response["saved_unknown_path"] = destination_path # Opcional: informar dónde se guardó
             except Exception as e_save:
                 app.logger.error(f"Error guardando imagen desconocida: {e_save}", exc_info=True)
@@ -602,7 +604,7 @@ def descargar_imagenes_concurrente(lista_personas):
 
 # Obtener la lista de usuarios (alumnos y profesores) de un horario específico
 @app.route('/usuarios/<id_horario>', methods=['GET'])
-def obtener_usuarios(id_horario):
+async def obtener_usuarios(id_horario):
     """
     Obtiene la lista de alumnos y profesores para un horario,
     guarda la información en la variable global y descarga las imágenes.
@@ -632,15 +634,10 @@ def obtener_usuarios(id_horario):
 
         lista_personas = usuarios_list  # Guarda en la variable global
         descargar_imagenes_concurrente(lista_personas)  # Descarga las imágenes
-
+        lista_personas = []  # Limpia la variable global después de descargar
         return jsonify({"usuarios": usuarios_list}), 200
     except Exception as e:
         return jsonify({'mensaje': f'Error al obtener usuarios: {str(e)}'}), 500
 
 if __name__ == '__main__':
-    import logging
-    logging.basicConfig(level=logging.DEBUG) # Cambiar a INFO para menos verbosidad
-    app.run(debug=True)
-
-    with app.app_context():
-        db.create_all()
+    app.run(host="0.0.0.0", port=5000, debug=True)
