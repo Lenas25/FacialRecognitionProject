@@ -15,7 +15,7 @@ class Salon(db.Model):
 class Horario(db.Model):
     __tablename__ = 'horario'
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    dia_semana = Column(Enum('lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sabado'))
+    dia_semana = Column(Enum('lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado', 'domingo'))
     hora_inicio = Column(Time)
     hora_fin = Column(Time)
     id_salon = Column(BigInteger, ForeignKey('salon.id'))

@@ -208,9 +208,6 @@ class CamaraScreen(Screen):
             self.cap.release()
             self.cap = None
 
-    """
-    LENIN AQUI ES DONDE SE HACE LA ACTUALIACION POR FRAME, la funcion de reconocer rostro debe obtener los usuarios del horario puedes usar el endpoint usuarios para obtener el array de usuarios y profesores con su respectico id, link y rol, la pregunta es en que momento se le mandara esos datos
-    """
     def update_frame(self, dt):
         if self.cap and self.cap.isOpened():
             ret, frame = self.cap.read()
@@ -224,7 +221,7 @@ class CamaraScreen(Screen):
                     persona = self.reconocer_rostro(frame_rgb)
                     self.reconocer_rostro(persona)
                     print("Cara centrada y nítida detectada. Enviando a reconocimiento...")
-                    # pass  # Reemplaza esto con tu llamada a la función de reconocimiento facial
+                    
 
                 buf = cv2.flip(frame_rgb, -1).tobytes()
                 image_texture = Texture.create(size=(frame.shape[1], frame.shape[0]), colorfmt='rgb')
@@ -274,22 +271,24 @@ class CamaraScreen(Screen):
             hora_despues = (hora_fin_dt + datetime.timedelta(minutes=minutos_despues)).strftime("%H:%M:%S")
             # si la hora actual esta entre ese rango entonces sigue detectando rostros
             print(f"Verificando horario: {horario['id']} de {hora_antes} a {hora_despues}")
-            if hora_actual.strftime("%H:%M:%S") == hora_antes:
-                self.actualizar_lista_alumnos(horario['id'])
-                self.detectar_rostro = True
-                print("Inicio nuevo curso, enviando lista de alumnos...")
-            elif hora_actual.strftime("%H:%M:%S") > hora_antes and hora_actual.strftime("%H:%M:%S") < hora_despues:
-                self.detectar_rostro = True
-                print("En el rando, detectando rostro...")
-                break
-            elif hora_actual.strftime("%H:%M:%S") == hora_despues:
-                self.detectar_rostro = False
-                self.guardar_asistencia(horario['id'])
-                self.enviar_reporte(horario['id'])
-                self.storage_asistencia.put("asistencia", asistencia=[])
-                self.eliminar_imagenes()
-                print("Fuera del rango, guardando asistencia y enviando reporte...")
-                break
+            self.actualizar_lista_alumnos(horario['id'])
+            # if hora_actual.strftime("%H:%M:%S") == hora_antes:
+            #     self.actualizar_lista_alumnos(horario['id'])
+            #     self.detectar_rostro = True
+            #     print("Inicio nuevo curso, enviando lista de alumnos...")
+            # elif hora_actual.strftime("%H:%M:%S") > hora_antes and hora_actual.strftime("%H:%M:%S") < hora_despues:
+            #     self.detectar_rostro = True
+            #     print("En el rando, detectando rostro...")
+            #     break
+            # elif hora_actual.strftime("%H:%M:%S") == hora_despues:
+            #     self.detectar_rostro = False
+            #     self.guardar_asistencia(horario['id'])
+            #     self.enviar_reporte(horario['id'])
+            #     self.storage_asistencia.put("asistencia", asistencia=[])
+            #     self.eliminar_imagenes()
+            #     print("Fuera del rango, guardando asistencia y enviando reporte...")
+            #     break
+            self.detectar_rostro = True
     
     def actualizar_lista_alumnos(self, id_horario):
         response = requests.get(f'{endpoints["usuarios"]}/{id_horario}')
@@ -321,12 +320,12 @@ class CamaraScreen(Screen):
         :param frame: El frame de la cámara (se espera que sea un array NumPy de OpenCV).
         """
         if frame is None:
-            self.logger.warning("FRONTEND: Se recibió un frame nulo. No se puede procesar.")
+            print("FRONTEND: Se recibió un frame nulo. No se puede procesar.")
             return
 
-        api_url = self.endpoints.get("IA")
+        api_url = endpoints.get("ia")
         if not api_url:
-            self.logger.error("FRONTEND: La URL del endpoint 'IA' no está configurada.")
+            print("FRONTEND: La URL del endpoint 'IA' no está configurada.")
             return
 
         try:
@@ -334,13 +333,13 @@ class CamaraScreen(Screen):
             #    DeepFace usualmente trabaja bien con JPG.
             success, encoded_image = cv2.imencode('.jpg', frame)
             if not success:
-                self.logger.error("FRONTEND: No se pudo codificar el frame a JPG.")
+                print("FRONTEND: No se pudo codificar el frame a JPG.")
                 return
 
             # El backend espera 'image_file' como nombre del campo del archivo.
             files_to_send = {'image_file': ('captured_frame.jpg', encoded_image.tobytes(), 'image/jpeg')}
 
-            self.logger.info(f"FRONTEND: Enviando frame a {api_url} para reconocimiento...")
+            print(f"FRONTEND: Enviando frame a {api_url} para reconocimiento...")
 
             # 2. Realizar la solicitud POST al backend.
             #    Es buena idea añadir un timeout a la solicitud.
@@ -351,36 +350,36 @@ class CamaraScreen(Screen):
 
             # 3. Procesar la respuesta JSON del backend.
             datos_respuesta = response.json()
-            self.logger.info(f"FRONTEND: Respuesta recibida del backend: {datos_respuesta}")
+            print(f"FRONTEND: Respuesta recibida del backend: {datos_respuesta}")
 
             # 4. Verificar si la persona fue clasificada.
             if datos_respuesta.get('clasificado') is True:
-                self.logger.info(f"FRONTEND: Persona reconocida: ID={datos_respuesta.get('id')}, Rol={datos_respuesta.get('rol')}")
+                print(f"FRONTEND: Persona reconocida: ID={datos_respuesta.get('id')}, Rol={datos_respuesta.get('rol')}")
                 # Llamar a la función para guardar la asistencia con los datos recibidos.
                 self.guardar_asistencia_local(datos_respuesta)
             else:
                 # Si no fue clasificado, el backend ya debería haber guardado la imagen
                 # en la carpeta de desconocidos (según la lógica del backend).
                 message = datos_respuesta.get('message', 'Persona no reconocida o similitud baja.')
-                self.logger.info(f"FRONTEND: {message} ID={datos_respuesta.get('id')}, Rol={datos_respuesta.get('rol')}")
+                print(f"FRONTEND: {message} ID={datos_respuesta.get('id')}, Rol={datos_respuesta.get('rol')}")
 
         except requests.exceptions.HTTPError as http_err:
             # Error específico de HTTP (ej. 400, 404, 500)
-            self.logger.error(f"FRONTEND: Error HTTP al contactar el API de IA: {http_err}")
+            print(f"FRONTEND: Error HTTP al contactar el API de IA: {http_err}")
             if http_err.response is not None:
-                self.logger.error(f"FRONTEND: Respuesta del servidor: {http_err.response.text}")
+                print(f"FRONTEND: Respuesta del servidor: {http_err.response.text}")
         except requests.exceptions.ConnectionError as conn_err:
-            self.logger.error(f"FRONTEND: Error de conexión con el API de IA: {conn_err}")
+            print(f"FRONTEND: Error de conexión con el API de IA: {conn_err}")
         except requests.exceptions.Timeout as timeout_err:
-            self.logger.error(f"FRONTEND: Timeout esperando respuesta del API de IA: {timeout_err}")
+            print(f"FRONTEND: Timeout esperando respuesta del API de IA: {timeout_err}")
         except requests.exceptions.RequestException as req_err:
             # Otro tipo de error de la librería requests
-            self.logger.error(f"FRONTEND: Error en la solicitud al API de IA: {req_err}")
+            print(f"FRONTEND: Error en la solicitud al API de IA: {req_err}")
         except ValueError as json_err: # Si response.json() falla
-            self.logger.error(f"FRONTEND: Error decodificando JSON de la respuesta del API de IA: {json_err}")
+            print(f"FRONTEND: Error decodificando JSON de la respuesta del API de IA: {json_err}")
         except Exception as e:
             # Cualquier otra excepción inesperada
-            self.logger.error(f"FRONTEND: Ocurrió un error inesperado en reconocer_rostro: {e}", exc_info=True)
+            print(f"FRONTEND: Ocurrió un error inesperado en reconocer_rostro: {e}")
     
     def calcular_asistencia(self, minutos):
         """
@@ -530,6 +529,7 @@ class ReconocimientoFacialApp(App):
         super().on_start()
         if self.storage.exists('salon') and self.storage.exists('horario'):
             self.actualizar_horario_dia()
+            print("Configuración existente encontrada. Cargando pantalla de cámara...")
             self.sm.current = 'camara_screen'
         else:
             self.sm.current = 'inicio_sesion_screen'

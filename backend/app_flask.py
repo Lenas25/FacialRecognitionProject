@@ -5,7 +5,7 @@ from database import db
 import os
 import pandas as pd
 import cv2  # For image processing if needed, DeepFace uses it
-# from deepface import DeepFace
+from deepface import DeepFace
 import tempfile  # For temporarily storing the uploaded image
 import smtplib
 from email.mime.multipart import MIMEMultipart
@@ -14,6 +14,7 @@ from email.mime.base import MIMEBase
 from email import encoders
 from twilio.rest import Client
 import datetime
+import shutil
 import os
 import re # For a more robust parsing
 from dotenv import load_dotenv
@@ -33,7 +34,7 @@ lista_personas = []
 RUTA_CARPETA_IMAGENES = 'imagenes_temporales'
 RUTA_DESCONOCIDOS_CLASE_ACTUAL = 'desconocidos_clase_actual'
 
-MODEL_NAME = "VGG-Face" # O el que estés usando: "Facenet", "Facenet512", "OpenFace", "DeepFace", "DeepID", "ArcFace", "Dlib", "SFace"
+MODEL_NAME = "VGG-Face"
 DETECTOR_BACKEND = "opencv" # O "ssd", "dlib", "mtcnn", "retinaface", "mediapipe", "yolov8", "yunet", "fastmtcnn"
 DISTANCE_METRIC = 'cosine' # 'cosine', 'euclidean', 'euclidean_l2'
 DISTANCE_THRESHOLD = 0.40 # Umbral de distancia. Ajusta esto según tus pruebas. Para VGG-Face y cosine, 0.4 es un buen punto de partida.
@@ -47,8 +48,6 @@ DISTANCE_THRESHOLD = 0.6  # Ejemplo para Facenet. Reduce para mayor certeza.
 # 'opencv', 'ssd', 'dlib', 'mtcnn', 'retinaface', 'mediapipe'
 DETECTOR_BACKEND = 'mtcnn'
 
-
-# ... (other imports)
 
 def parse_identity_filename(filename):
     """
@@ -105,8 +104,6 @@ def parse_identity_filename(filename):
         app.logger.warning(f"Formato de nombre de archivo no reconocido: {filename}. No se pudo extraer ID/Rol.")
         return None, None
 
-# ... (rest of your Flask app code)
-
 # sirve para consultar si el salon existe para guardar la configuracion y para consultar el horario de acuerdo al salon y devolver todos los horarios para verificar que curso se encuentra dando en este momento, esto se llama luego de que se haya guardado la configuracion y al iniciar el reconocimiento
 @app.route('/salon', methods=['POST'])
 def obtener_salones():
@@ -144,15 +141,6 @@ def obtener_salones():
 
     else:
         return jsonify({"message": "Salon no encontrado."}), 404
-
-
-@app.route('/reconocimiento', methods=['GET'])
-def reconocimiento_facial(salon, imagen):
-    # consultar a base de datos enviando una imagen, verificar los horrios de acuerdo a salon, luego descarta por la hora de inicio de 15 minutos antes y de la tabla matricula del id dell horario se hallan los id de alumnos y envia la lista de id de posibles alumnos al modelo de IA y todos los profesores segun el id de horario
-    # retorna un id y si es profesor o alumno o si no se encuentra en la base de datos
-
-    return 0
-
 
 # registrar la asistencia de un grupo de alumnos y profesores, este se llama al finalizar la clase para el registro de los datos segun este en el local , desde del front recibiendo el id del horario y la lista de alumnos y profesores en formato
 # [
@@ -202,8 +190,6 @@ def registrar_asistencia(id_horario):
         return jsonify({'error': f'Error al insertar el grupo de asistencias: {str(e)}'}), 500
 
 # registrar la imagen de un desconocido en la base de datos considerando la fecha de registro
-
-
 @app.route('/desconocido/<id_horario>', methods=['POST'])
 def registrar_desconocido(id_horario):
     # se recibe en el formato {
@@ -235,8 +221,6 @@ def registrar_desconocido(id_horario):
         return jsonify({'error': f'Error al insertar el desconocido: {str(e)}'}), 500
 
 # exportar la asistencia en un excel con la lista de alumnos y profesores, y la lista de desconocidos
-
-
 @app.route('/reporte/<salon>/<id_horario>', methods=['POST'])
 def enviar_reporte(salon, id_horario):
 
@@ -536,7 +520,7 @@ def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo mante
             try:
                 os.makedirs(RUTA_DESCONOCIDOS_CLASE_ACTUAL, exist_ok=True)
                 # Usar un nombre único para la imagen guardada
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 unknown_filename = f"unknown_{timestamp}.jpg"
                 destination_path = os.path.join(RUTA_DESCONOCIDOS_CLASE_ACTUAL, unknown_filename)
                 shutil.copy(captured_face_path, destination_path)
@@ -596,12 +580,15 @@ def descargar_imagenes_concurrente(lista_personas):
         for persona in lista_personas:
             # Obtén la URL de la imagen, maneja el caso de que no exista
             url_imagen = persona.get('url_img', '')
+            print(f"Procesando persona: {persona['id']} con tipo {persona['tipo']} y URL: {url_imagen}")
             if url_imagen:
                 nombre_archivo = os.path.join(
                     # Usa .jpg
                     RUTA_CARPETA_IMAGENES, f"persona_{persona['id']}_tipo_{persona["tipo"]}.jpg")
+                print(f"Preparando descarga de imagen: {nombre_archivo} desde {url_imagen}")
                 futures.append(executor.submit(
                     descargar_imagen, url_imagen, nombre_archivo))
+                print(f"Descarga programada para: {nombre_archivo}")
 
         # Espera a que todas las descargas se completen y verifica si hubo errores
         all_downloads_successful = all(

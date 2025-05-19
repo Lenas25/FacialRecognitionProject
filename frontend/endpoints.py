@@ -7,4 +7,5 @@ endpoints = {
     "mensaje": url + "mensaje",
     "desconocido": url + "desconocido",
     "usuarios": url + "usuarios",
+    "ia": url + "ia",
   }
