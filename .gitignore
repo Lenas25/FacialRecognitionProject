@@ -3,3 +3,7 @@ venv/
 backend/__pycache__/
 frontend/__pycache__/
 local.json
+desconocidos_clase_actual/
+asistencia.json
+local.json
+imagenes_temporales/
