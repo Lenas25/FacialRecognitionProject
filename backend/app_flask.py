@@ -44,10 +44,16 @@ if not os.path.exists(RUTA_CARPETA_IMAGENES):
     os.makedirs(RUTA_CARPETA_IMAGENES)
 
 # Modelos populares: "VGG-Face", "Facenet", "Facenet512", "ArcFace", "SFace"
-MODEL_NAME = "Facenet"
-DISTANCE_THRESHOLD = 0.6  # Ejemplo para Facenet. Reduce para mayor certeza.
-# 'opencv', 'ssd', 'dlib', 'mtcnn', 'retinaface', 'mediapipe'
-DETECTOR_BACKEND = 'mtcnn'
+# MODEL_NAME = "Facenet"
+#DISTANCE_THRESHOLD = 0.6  # Ejemplo para Facenet. Reduce para mayor certeza.
+## 'opencv', 'ssd', 'dlib', 'mtcnn', 'retinaface', 'mediapipe'
+#DETECTOR_BACKEND = 'mtcnn'
+
+def execute_automatization(id_profesor):
+    pass
+
+def execute_automatization_close(id_profesor):
+    pass
 
 
 def parse_identity_filename(filename):

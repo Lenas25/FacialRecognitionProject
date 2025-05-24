@@ -154,7 +154,7 @@ class CamaraScreen(Screen):
         self.yolo_model = YOLO(self.model_path)
         self.centro_x_imagen = 0.5
         self.tolerancia_x = 0.2
-        self.varianza_laplace_minima = 0.5
+        self.varianza_laplace_minima = 0.5 #TODO: Cambiar a un valor más adecuado
 
     def calcular_varianza_laplace(self, imagen):
         """
@@ -250,7 +250,7 @@ class CamaraScreen(Screen):
 
         if minuto_actual != self.ultimo_minuto_verificado:
             print("NUEVO MINUTO DETECTADO:", current_time_str)
-            self.verificar_horario(now, 5, 5)
+            self.verificar_horario(now, 0, 0)
             self.ultimo_minuto_verificado = minuto_actual
 
     # esta funcion verifica si la hora actual se encuentra en el rango de horario del dia de hoy, si es asi se activa la deteccion de rostro, si no y esta en la final de hora se envia el reporte de la clase y se guarda la asistencia calculada por local
@@ -457,7 +457,6 @@ class CamaraScreen(Screen):
         print(f"Guardando asistencia para el horario {id_horario} con los siguientes datos: {datos}")
         response = requests.post(f'{endpoints["asistencia"]}/{id_horario}', json=datos)
         if response.status_code == 200:
-            # self.storage_asistencia.clear()
             print("Asistencia guardada correctamente")
         else:
             print(f"Error al guardar asistencia: {response}")
