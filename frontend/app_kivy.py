@@ -154,7 +154,7 @@ class CamaraScreen(Screen):
         self.yolo_model = YOLO(self.model_path)
         self.centro_x_imagen = 0.5
         self.tolerancia_x = 0.2
-        self.varianza_laplace_minima = 0.5 #TODO: Cambiar a un valor más adecuado
+        self.varianza_laplace_minima = 0.9 #TODO: Cambiar a un valor más adecuado
 
     def calcular_varianza_laplace(self, imagen):
         """
@@ -243,6 +243,8 @@ class CamaraScreen(Screen):
 
     # esta funcion sirve para poder actualizar la hora cada segundo y cada minuto se verifica si la hora actual se encuentra o no en el rango de la clase del dia de hoy
     def actualizar_hora(self, dt):
+        self.storage = JsonStore('local.json')
+        self.storage_asistencia = JsonStore('asistencia.json')
         now = datetime.datetime.now()
         current_time_str = now.strftime('%H:%M:%S')
         self.hora_label.text = current_time_str
@@ -250,11 +252,12 @@ class CamaraScreen(Screen):
 
         if minuto_actual != self.ultimo_minuto_verificado:
             print("NUEVO MINUTO DETECTADO:", current_time_str)
-            self.verificar_horario(now, 0, 0)
+            if self.storage.exists('horario_dia'):
+                self.verificar_horario(now, 0, 0)
             self.ultimo_minuto_verificado = minuto_actual
 
     # esta funcion verifica si la hora actual se encuentra en el rango de horario del dia de hoy, si es asi se activa la deteccion de rostro, si no y esta en la final de hora se envia el reporte de la clase y se guarda la asistencia calculada por local
-    def verificar_horario(self, hora_actual, minutos_antes=4, minutos_despues=4):
+    def verificar_horario(self, hora_actual, minutos_antes=5, minutos_despues=5):
         self.storage = JsonStore('local.json')
         self.storage_asistencia = JsonStore('asistencia.json')
         
@@ -580,11 +583,15 @@ class ReconocimientoFacialApp(App):
     # verificar si ya se ha realizado la configuracion del salon y el horario
     def on_start(self):
         super().on_start()
-        if self.storage.exists('salon') and self.storage.exists('horario'):
-            self.actualizar_horario_dia()
-            print("Configuración existente encontrada. Cargando pantalla de cámara...")
-            self.sm.current = 'camara_screen'
+        if self.storage.count() != 0:
+            if self.storage.exists('salon') and self.storage.exists('horario'):
+                self.actualizar_horario_dia()
+                print("Configuración existente encontrada. Cargando pantalla de cámara...")
+                self.sm.current = 'camara_screen'
+            else:
+                self.sm.current = 'inicio_sesion_screen'
         else:
+            print("No se encontró configuración previa. Cargando pantalla de inicio de sesión...")
             self.sm.current = 'inicio_sesion_screen'
     
     def obtener_dia_semana(self):
