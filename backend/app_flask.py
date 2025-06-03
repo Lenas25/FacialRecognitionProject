@@ -30,7 +30,6 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:root@localhost:54
 
 db.init_app(app)
 
-lista_personas = []
 
 RUTA_CARPETA_IMAGENES = 'imagenes_temporales'
 RUTA_DESCONOCIDOS_CLASE_ACTUAL = 'desconocidos_clase_actual'
@@ -38,7 +37,7 @@ RUTA_DESCONOCIDOS_CLASE_ACTUAL = 'desconocidos_clase_actual'
 MODEL_NAME = "VGG-Face"
 DETECTOR_BACKEND = "opencv" # O "ssd", "dlib", "mtcnn", "retinaface", "mediapipe", "yolov8", "yunet", "fastmtcnn"
 DISTANCE_METRIC = 'cosine' # 'cosine', 'euclidean', 'euclidean_l2'
-DISTANCE_THRESHOLD = 0.40 # Umbral de distancia. Ajusta esto según tus pruebas. Para VGG-Face y cosine, 0.4 es un buen punto de partida.
+DISTANCE_THRESHOLD = 0.60 # Umbral de distancia. Ajusta esto según tus pruebas. Para VGG-Face y cosine, 0.4 es un buen punto de partida.
 
 if not os.path.exists(RUTA_CARPETA_IMAGENES):
     os.makedirs(RUTA_CARPETA_IMAGENES)
@@ -615,12 +614,9 @@ async def obtener_usuarios(id_horario):
     Obtiene la lista de alumnos y profesores para un horario,
     guarda la información en la variable global y descarga las imágenes.
     """
-    global lista_personas
     try:
         alumnos = Matricula.query.filter_by(id_horario=id_horario).all()
         profesores = Profesor.query.all()
-
-        print(alumnos)
 
         usuarios_list = []
 
@@ -637,10 +633,8 @@ async def obtener_usuarios(id_horario):
                 "url_img": profesor.url_img,
                 "tipo": 1  # 1 para profesores
             })
-
-        lista_personas = usuarios_list  # Guarda en la variable global
-        descargar_imagenes_concurrente(lista_personas)  # Descarga las imágenes
-        lista_personas = []  # Limpia la variable global después de descargar
+            
+        descargar_imagenes_concurrente(usuarios_list)  # Descarga las imágenes
         return jsonify({"usuarios": usuarios_list}), 200
     except Exception as e:
         return jsonify({'mensaje': f'Error al obtener usuarios: {str(e)}'}), 500

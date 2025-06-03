@@ -134,6 +134,7 @@ class CamaraScreen(Screen):
         self.orientation = 'horizontal'
         self.padding = dp(10)
         self.spacing = dp(10)
+        self.horarios_procesados_cierre = {}
 
         self.layout_botones_imagen = BoxLayout(orientation='vertical', spacing=dp(10))
 
@@ -147,7 +148,7 @@ class CamaraScreen(Screen):
         self.layout_botones_imagen.add_widget(self.camera_image)
 
         self.add_widget(self.layout_botones_imagen)
-        self.ultimo_minuto_verificado = -1
+        
         Clock.schedule_interval(self.actualizar_hora, 1)
 
         self.model_path = hf_hub_download(repo_id="arnabdhar/YOLOv8-Face-Detection", filename="model.pt")
@@ -244,20 +245,15 @@ class CamaraScreen(Screen):
     # esta funcion sirve para poder actualizar la hora cada segundo y cada minuto se verifica si la hora actual se encuentra o no en el rango de la clase del dia de hoy
     def actualizar_hora(self, dt):
         self.storage = JsonStore('local.json')
-        self.storage_asistencia = JsonStore('asistencia.json')
         now = datetime.datetime.now()
         current_time_str = now.strftime('%H:%M:%S')
         self.hora_label.text = current_time_str
-        minuto_actual = now.minute
 
-        if minuto_actual != self.ultimo_minuto_verificado:
-            print("NUEVO MINUTO DETECTADO:", current_time_str)
-            if self.storage.exists('horario_dia'):
-                self.verificar_horario(now, 0, 0)
-            self.ultimo_minuto_verificado = minuto_actual
+        if self.storage.exists('horario_dia'):
+            self.verificar_horario(now, 0)
 
     # esta funcion verifica si la hora actual se encuentra en el rango de horario del dia de hoy, si es asi se activa la deteccion de rostro, si no y esta en la final de hora se envia el reporte de la clase y se guarda la asistencia calculada por local
-    def verificar_horario(self, hora_actual, minutos_antes=5, minutos_despues=5):
+    def verificar_horario(self, hora_actual, minutos_antes=5):
         self.storage = JsonStore('local.json')
         self.storage_asistencia = JsonStore('asistencia.json')
         
@@ -279,7 +275,7 @@ class CamaraScreen(Screen):
             hora_inicio_dt = datetime.datetime.combine(fecha_hoy, hora_inicio)
             hora_fin_dt = datetime.datetime.combine(fecha_hoy, hora_fin)
             hora_antes = (hora_inicio_dt - datetime.timedelta(minutes=minutos_antes)).strftime("%H:%M:%S")
-            hora_despues = (hora_fin_dt + datetime.timedelta(minutes=minutos_despues)).strftime("%H:%M:%S")
+            hora_despues = (hora_fin_dt + datetime.timedelta(minutes=2)).strftime("%H:%M:%S")
             print("SE VERIFICA")
             # si la hora actual esta entre ese rango entonces sigue detectando rostros
             print(f"Verificando horario {hora_actual}: {horario['id']} de {hora_antes} a {hora_despues}")
@@ -288,20 +284,28 @@ class CamaraScreen(Screen):
                 self.detectar_rostro = True
                 print("Inicio nuevo curso, enviando lista de alumnos...")
                 break
-            elif hora_actual.strftime("%H:%M:%S") > hora_antes and hora_actual.strftime("%H:%M:%S") < hora_despues:
+            elif hora_actual.strftime("%H:%M:%S") > hora_antes and hora_actual.strftime("%H:%M:%S") <= hora_fin:
                 self.detectar_rostro = True
                 print("En el rango, detectando rostro...")
                 break
-            elif hora_actual.strftime("%H:%M:%S") == hora_despues:
+            elif hora_actual.strftime("%H:%M:%S") > hora_fin and hora_actual.strftime("%H:%M:%S") <= hora_despues:
+                if not self.horarios_procesados_cierre.get(horario['id'], False):
+                    self.detectar_rostro = False 
+                    print(f"Fuera del rango para {horario['id']}, guardando asistencia y enviando reporte...")
+
+                    self.horarios_procesados_cierre[horario['id']] = True
+
+                    self.guardar_asistencia(horario['id'])
+                    self.guardar_desconocidos(horario['id'])
+                    self.enviar_reporte(horario['id'])
+                    self.mostrar_popup("Reporte", f"Reporte enviado y asistencia guardada para {horario['id']}.", type="reporte")
+                    self.eliminar_imagenes()
+                    self.storage_asistencia.clear()
+                    break
+            elif hora_actual.strftime("%H:%M:%S") > hora_despues and not self.horarios_procesados_cierre.get(horario['id'], False):
                 self.detectar_rostro = False
-                print("Fuera del rango, guardando asistencia y enviando reporte...")
-                self.guardar_asistencia(horario['id'])
-                self.guardar_desconocidos(horario['id'])
-                self.enviar_reporte(horario['id'])
-                self.mostrar_popup("Reporte", "Reporte enviado y asistencia guardada.", type="reporte")
-                self.eliminar_imagenes()
-                self.storage_asistencia.clear()
-                break
+                print(f"Clase {horario['id']} ya terminada y fuera del rango de cierre. Asegurando que detectar_rostro es False.")
+                self.horarios_procesados_cierre[horario['id']] = True
     
     def actualizar_lista_alumnos(self, id_horario):
         response = requests.get(f'{endpoints["usuarios"]}/{id_horario}')
@@ -341,7 +345,7 @@ class CamaraScreen(Screen):
         if frame is None:
             print("FRONTEND: Se recibió un frame nulo. No se puede procesar.")
             return
-
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  
         api_url = endpoints.get("ia")
         if not api_url:
             print("FRONTEND: La URL del endpoint 'IA' no está configurada.")
