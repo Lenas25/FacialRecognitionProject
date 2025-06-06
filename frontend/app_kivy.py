@@ -272,23 +272,33 @@ class CamaraScreen(Screen):
                 hora_fin = datetime.datetime.strptime(hora_fin_str, "%H:%M").time()
 
             fecha_hoy = hora_actual.date()
+            
             hora_inicio_dt = datetime.datetime.combine(fecha_hoy, hora_inicio)
             hora_fin_dt = datetime.datetime.combine(fecha_hoy, hora_fin)
-            hora_antes = (hora_inicio_dt - datetime.timedelta(minutes=minutos_antes)).strftime("%H:%M:%S")
-            hora_despues = (hora_fin_dt + datetime.timedelta(minutes=2)).strftime("%H:%M:%S")
+            
+            hora_antes = hora_inicio_dt - datetime.timedelta(minutes=minutos_antes)
+            hora_despues = hora_fin_dt + datetime.timedelta(minutes=2)
+            
+            # Convertimos TODO a string aquí
+            hora_actual_str = hora_actual.strftime("%H:%M:%S")
+            hora_antes_str = hora_antes.strftime("%H:%M:%S")
+            hora_inicio_str = hora_inicio_dt.strftime("%H:%M:%S")
+            hora_fin_str = hora_fin_dt.strftime("%H:%M:%S")
+            hora_despues_str = hora_despues.strftime("%H:%M:%S")
+
             print("SE VERIFICA")
             # si la hora actual esta entre ese rango entonces sigue detectando rostros
             print(f"Verificando horario {hora_actual}: {horario['id']} de {hora_antes} a {hora_despues}")
-            if hora_actual.strftime("%H:%M:%S") == hora_antes:
+            if hora_actual_str == hora_antes_str:
                 self.actualizar_lista_alumnos(horario['id'])
                 self.detectar_rostro = True
                 print("Inicio nuevo curso, enviando lista de alumnos...")
                 break
-            elif hora_actual.strftime("%H:%M:%S") > hora_antes and hora_actual.strftime("%H:%M:%S") <= hora_fin:
+            elif hora_antes_str < hora_actual_str <= hora_fin_str:
                 self.detectar_rostro = True
                 print("En el rango, detectando rostro...")
                 break
-            elif hora_actual.strftime("%H:%M:%S") > hora_fin and hora_actual.strftime("%H:%M:%S") <= hora_despues:
+            elif hora_fin_str < hora_actual_str <= hora_despues_str:
                 if not self.horarios_procesados_cierre.get(horario['id'], False):
                     self.detectar_rostro = False 
                     print(f"Fuera del rango para {horario['id']}, guardando asistencia y enviando reporte...")
@@ -302,7 +312,7 @@ class CamaraScreen(Screen):
                     self.eliminar_imagenes()
                     self.storage_asistencia.clear()
                     break
-            elif hora_actual.strftime("%H:%M:%S") > hora_despues and not self.horarios_procesados_cierre.get(horario['id'], False):
+            elif hora_actual_str > hora_despues_str and not self.horarios_procesados_cierre.get(horario['id'], False):
                 self.detectar_rostro = False
                 print(f"Clase {horario['id']} ya terminada y fuera del rango de cierre. Asegurando que detectar_rostro es False.")
                 self.horarios_procesados_cierre[horario['id']] = True
