@@ -1,4 +1,4 @@
-import mysql.connector  # type: ignore
+import psycopg2
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -8,29 +8,25 @@ from webdriver_manager.chrome import ChromeDriverManager
 import pyautogui
 import cv2
 import time
-from datetime import datetime, time as dtime
+from datetime import datetime
 import socket
 import os
+
 
 # Función para obtener el nombre de la computadora
 def obtener_nombre_computadora():
     return socket.gethostname()
 
-# Función para obtener el salón desde la base de datos usando el nombre de la computadora
+# Función para obtener la etiqueta del salón desde la base de datos
 def obtener_salon_desde_bd(nombre_computadora):
     cursor.execute("""
-        SELECT salon FROM computadoras WHERE nombre_computadora = %s
+        SELECT s.etiqueta
+        FROM computadora c
+        JOIN salon s ON c.id_salon = s.id
+        WHERE c.nombre = %s
     """, (nombre_computadora,))
     resultado = cursor.fetchone()
     return resultado[0] if resultado else None
-
-# Función para convertir timedelta a time
-def timedelta_a_time(tdelta):
-    total_segundos = tdelta.total_seconds()
-    horas = int(total_segundos // 3600)
-    minutos = int((total_segundos % 3600) // 60)
-    segundos = int(total_segundos % 60)
-    return dtime(horas, minutos, segundos)
 
 # Esperar hasta que inicie la clase
 def esperar_inicio_clase(hora_inicio_time):
@@ -67,8 +63,8 @@ def buscar_y_esperar_clase():
             JOIN curso c ON h.id_curso = c.id
             JOIN profesor p ON h.id_profesor = p.id
             JOIN salon s ON h.id_salon = s.id
-            WHERE STR_TO_DATE(h.hora_inicio, '%H:%i') <= STR_TO_DATE(%s, '%H:%i')
-            AND STR_TO_DATE(h.hora_fin, '%H:%i') >= STR_TO_DATE(%s, '%H:%i')
+            WHERE h.hora_inicio::time <= %s::time
+            AND h.hora_fin::time >= %s::time
             AND s.etiqueta = %s
             AND h.dia_semana = %s
         """, (current_time_str, current_time_str, salon_detectado, dia_actual_bd))
@@ -80,17 +76,23 @@ def buscar_y_esperar_clase():
             if salon_etiqueta == salon_detectado:
                 return (curso_nombre, correo, contrasena, hora_inicio, hora_fin)
 
-        print(f"[{current_time_str}] No hay clases aún. Reintentando en 60 segundos...")
-        time.sleep(60)
+        print(f"[{current_time_str}] No hay clases aún. Reintentando")
+        time.sleep(1)
 
-# Conexión a la base de datos
-conexion = mysql.connector.connect(
-    host="localhost",
-    user="root",
-    password="teamomama123",
-    database="optia"
-)
-cursor = conexion.cursor()
+
+# Conexión a la base de datos PostgreSQL
+try:
+    conexion = psycopg2.connect(
+        host="localhost",
+        port=5432,
+        user="postgres",
+        password="teamomama123",
+        dbname="db_reconocimiento"
+    )
+    cursor = conexion.cursor()
+except Exception as e:
+    print("Error al conectar con PostgreSQL:", e)
+    exit()
 
 # Diccionario para traducir día al formato de la BD
 dias_traducidos = {
@@ -113,6 +115,7 @@ if not salon_detectado:
     cursor.close()
     conexion.close()
     exit()
+
 print(f"Salón detectado: {salon_detectado}")
 
 # Buscar y esperar a que haya clase
@@ -123,9 +126,9 @@ curso_nombre, correo, contrasena, hora_inicio, hora_fin = curso_seleccionado
 print(f"Curso encontrado: {curso_nombre} ({hora_inicio} - {hora_fin})")
 print(f"Profesor: {correo}")
 
-# Convertir a hora tipo time
-hora_inicio_time = timedelta_a_time(hora_inicio)
-hora_fin_time = timedelta_a_time(hora_fin)
+# Asignar directamente (ya son datetime.time)
+hora_inicio_time = hora_inicio
+hora_fin_time = hora_fin
 
 # Esperar inicio real
 esperar_inicio_clase(hora_inicio_time)
@@ -177,14 +180,20 @@ try:
             print("Se hizo clic en el botón 'Unirse al Zoom'.")
             time.sleep(3)
 
-            pyautogui.press('tab')    # Foco a "Recordar mi elección"
-            pyautogui.press('space')  # Marca la casilla
-            pyautogui.press('tab')    # Foco a "Abrir Zoom Meetings"
-            pyautogui.press('enter')  # Aceptar abrir Zoom
+            pyautogui.press('tab')
+            pyautogui.press('space')
+            pyautogui.press('tab')
+            pyautogui.press('enter')
             print("Confirmación de abrir Zoom enviada.")
             time.sleep(16)
 
-            ruta_imagen = r"F:\Universidad\ciclo 10\IA\audio_compartido.PNG"
+            carpeta_actual = os.path.dirname(os.path.abspath(__file__))
+
+            # Construir ruta relativa a la imagen dentro de esa carpeta
+            ruta_imagen = os.path.join(carpeta_actual, "audio_compartido.PNG")
+
+            # Ahora puedes usar ruta_imagen con cv2.imread()
+            imagen = cv2.imread(ruta_imagen)
             print(f"Intentando cargar imagen desde: {ruta_imagen}")
             imagen = cv2.imread(ruta_imagen)
             if imagen is None:
@@ -209,11 +218,12 @@ try:
 
 except Exception as e:
     print(f"Error durante la navegación: {e}")
-finally:
-    driver.quit()
 
 # Esperar hasta fin de clase
 esperar_fin_clase(hora_fin_time)
+
+# Ahora sí cerramos Chrome al terminar la clase
+driver.quit()
 
 # Cierre de recursos
 cursor.close()
