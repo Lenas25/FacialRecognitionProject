@@ -38,7 +38,7 @@ RUTA_DESCONOCIDOS_CLASE_ACTUAL = 'desconocidos_clase_actual'
 MODEL_NAME = "VGG-Face"
 DETECTOR_BACKEND = "opencv" # O "ssd", "dlib", "mtcnn", "retinaface", "mediapipe", "yolov8", "yunet", "fastmtcnn"
 DISTANCE_METRIC = 'cosine' # 'cosine', 'euclidean', 'euclidean_l2'
-DISTANCE_THRESHOLD = 0.40 # Umbral de distancia. Ajusta esto según tus pruebas. Para VGG-Face y cosine, 0.4 es un buen punto de partida.
+DISTANCE_THRESHOLD = 0.60 # Umbral de distancia. Ajusta esto según tus pruebas. Para VGG-Face y cosine, 0.4 es un buen punto de partida.
 
 if not os.path.exists(RUTA_CARPETA_IMAGENES):
     os.makedirs(RUTA_CARPETA_IMAGENES)
@@ -179,6 +179,7 @@ async def registrar_asistencia(id_horario):
                 id_alumno=item['id'],
                 fecha=fecha,
                 estado=item['estado'],
+                tiempo_permanencia=str(item["tiempo"])
             ))
         elif item['rol'] == 1:
             new_asistencias_profesores.append(AsistenciaProfesor(
@@ -186,6 +187,7 @@ async def registrar_asistencia(id_horario):
                 id_profesor=item['id'],
                 fecha=fecha,
                 estado=item['estado'],
+                tiempo_permanencia=str(item["tiempo"])
             ))
     try:
         db.session.add_all(new_asistencias_alumnos)
@@ -248,39 +250,48 @@ async def enviar_reporte(salon, id_horario):
             Desconocido.fecha == datetime.datetime.now().date()
         ).all()
 
-        df_desconocidos = pd.DataFrame([(d.id_horario, d.url_img, d.fecha) for d in desconocidos],
+        df_desconocidos = pd.DataFrame([(d.id_horario, d.url_img, d.fecha.strftime('%Y-%m-%d')) for d in desconocidos],
                                        columns=['Seccion', 'Imagen', 'Fecha de Detección'])
-        df_alumnos = pd.DataFrame([(a.id, a.id_horario, a.id_alumno, a.estado, a.fecha) for a in alumnos],
-                                  columns=['ID', 'Seccion', 'Código', 'Estado', 'Fecha de Detección'])
-        df_docentes = pd.DataFrame([(d.id, d.id_horario, d.id_profesor, d.estado, d.fecha) for d in profesores],
-                                   columns=['ID', 'Seccion', 'Código de Profesor', 'Estado', 'Fecha de Detección'])
+        df_alumnos = pd.DataFrame([(a.id, a.id_horario, a.id_alumno, a.estado, a.fecha.strftime('%Y-%m-%d'), a.tiempo_permanencia) for a in alumnos],
+                                  columns=['ID', 'Seccion', 'Código', 'Estado', 'Fecha de Detección', 'Tiempo Asistencia (min)'])
+        df_docentes = pd.DataFrame([(d.id, d.id_horario, d.id_profesor, d.estado, d.fecha.strftime('%Y-%m-%d'), d.tiempo_permanencia) for d in profesores],
+                                   columns=['ID', 'Seccion', 'Código de Profesor', 'Estado', 'Fecha de Detección', 'Tiempo Asistencia (min)'])
 
         excel_filename = 'reporte_asistencia.xlsx'
 
         with pd.ExcelWriter(excel_filename, engine="xlsxwriter") as writer:
             df_alumnos.to_excel(writer, sheet_name='Alumnos', index=False)
             df_docentes.to_excel(writer, sheet_name='Docentes', index=False)
-            df_desconocidos.to_excel(
-                writer, sheet_name='Desconocidos', index=False)
+            df_desconocidos.to_excel(writer, sheet_name='Desconocidos', index=False)
 
-            worksheet_alumnos = writer.sheets['Alumnos']
-            worksheet_docentes = writer.sheets['Docentes']
-            worksheet_desconocidos = writer.sheets['Desconocidos']
+            workbook = writer.book
 
-            for i, col in enumerate(df_alumnos.columns):
-                column_len = max(df_alumnos[col].astype(
-                    str).map(len).max(), len(col))
-                worksheet_alumnos.set_column(i, i, column_len + 2)
+            # Formato para encabezados: fondo azul claro, texto blanco, negrita, bordes
+            header_format = workbook.add_format({
+                'bold': True,
+                'bg_color': '#B50D30',
+                'font_color': 'white',
+                'border': 1,
+                'align': 'center'
+            })
+            # Formato para celdas normales: bordes
+            cell_format = workbook.add_format({'border': 1})
 
-            for i, col in enumerate(df_docentes.columns):
-                column_len = max(df_docentes[col].astype(
-                    str).map(len).max(), len(col))
-                worksheet_docentes.set_column(i, i, column_len + 2)
+            # Formatear cada hoja
+            for sheet_name, df in zip(['Alumnos', 'Docentes', 'Desconocidos'],
+                                    [df_alumnos, df_docentes, df_desconocidos]):
+                worksheet = writer.sheets[sheet_name]
+                
+                # Ajustar ancho de columnas y aplicar formato de encabezado
+                for i, col in enumerate(df.columns):
+                    column_len = max(df[col].astype(str).map(len).max(), len(col))
+                    worksheet.set_column(i, i, column_len + 2, cell_format)
+                    worksheet.write(0, i, col, header_format)  # Encabezado con formato
 
-            for i, col in enumerate(df_desconocidos.columns):
-                column_len = max(df_desconocidos[col].astype(
-                    str).map(len).max(), len(col))
-                worksheet_desconocidos.set_column(i, i, column_len + 2)
+                # Aplicar formato de borde a todas las celdas de datos
+                for row in range(1, len(df) + 1):
+                    for col in range(len(df.columns)):
+                        worksheet.write(row, col, df.iloc[row - 1, col], cell_format)
 
         mensaje = MIMEMultipart()
         mensaje['From'] = EMAIL_ADDRESS
@@ -358,6 +369,8 @@ async def enviar_mensaje(id_horario):
                 return jsonify({'mensaje': f"Error al enviar mensaje a {alumno.nombre} {alumno.apellido} ({alumno.codigo_universitario}): {e}"}), 400
         else:
             return jsonify({'mensaje': f"No se puede enviar mensaje a {alumno.nombre} {alumno.apellido} ({alumno.codigo_universitario}): No tiene número de teléfono registrado."}), 400
+
+    return jsonify({'mensaje': 'No hay alumnos ausentes para notificar.'}), 200
 
 
 @app.route('/ia', methods=['POST'])
@@ -505,6 +518,7 @@ async def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo
                                 best_match_response["message"] = "No se reconoce al usuario."
                                 best_match_response["distance"] = round(float(distance), 4) # Aún así informamos la distancia
                         else:
+                            best_match_response["clasificado"] = True
                             app.logger.info(f"❌ Coincidencia encontrada ({identity_path}) pero la distancia ({distance:.4f}) supera el umbral ({DISTANCE_THRESHOLD}).")
                             best_match_response["message"] = "Vuelve a intentar, por favor."
                             best_match_response["distance"] = round(float(distance), 4)
