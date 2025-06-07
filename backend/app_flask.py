@@ -21,12 +21,12 @@ from dotenv import load_dotenv
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor  # Para descarga concurrent
 import asyncio
-
+import psycopg2
 load_dotenv()
 
 app = Flask(__name__)
 
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:root@localhost:5432/db_reconocimiento'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:teamomama123@localhost:5432/db_reconocimiento'
 
 db.init_app(app)
 
@@ -405,7 +405,7 @@ async def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo
             elif not all(face_obj.get("is_real", False) for face_obj in face_objs):
                 app.logger.warning("Anti-spoofing: Se detectó una posible imagen falsa (spoof).")
                 best_match_response["message"] = "La imagen parece ser un intento de spoofing (falsa)."
-                # Para un intento de spoof, no procedemos a `DeepFace.find`
+                # Para un intento de spoof, no procedemos a DeepFace.find
                 return jsonify(best_match_response), 200 # O un 403 Forbidden si es más apropiado
             else:
                 app.logger.info("Anti-spoofing: La imagen parece ser real.")
@@ -468,7 +468,7 @@ async def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo
                              # o si usa un nombre genérico. Hay que revisar la salida exacta.
                              # Si no encuentra la columna específica, intentamos con 'distance' o la primera numérica después de 'identity'
                              # Por ahora, asumimos que la columna existe o DeepFace usa un default conocido.
-                             # Si es `cosine`, `euclidean`, `euclidean_l2` y está en columnas, la tomamos.
+                             # Si es cosine, euclidean, euclidean_l2 y está en columnas, la tomamos.
                             if DISTANCE_METRIC in best_match_candidate_df.columns:
                                 distance_col_name = DISTANCE_METRIC
                             else: # Fallback a un nombre genérico si la construcción falla
@@ -497,7 +497,42 @@ async def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo
                                 best_match_response["rol"] = user_rol
                                 best_match_response["clasificado"] = True
                                 best_match_response["distance"] = round(float(distance), 4)
+                                best_match_response["message"] = "Se identificó correctamente al usuario."
                                 app.logger.info(f"✅ Persona clasificada: ID={user_id}, Rol={user_rol}, Distancia={distance:.4f}")
+
+                                # ✅ Solo si es profesor, buscar datos adicionales
+                                if user_rol == 'profesor':
+                                    try:
+                                        with psycopg2.connect(
+                                            host="localhost",
+                                            port=5432,
+                                            user="postgres",
+                                            password="teamomama123",
+                                            dbname="db_reconocimiento"
+                                        ) as conn:
+                                            with conn.cursor() as cursor:
+                                                cursor.execute("""
+                                                    SELECT p.correo, p.contrasena, c.nombre
+                                                    FROM profesor p
+                                                    JOIN horario h ON p.id = h.id_profesor
+                                                    JOIN curso c ON h.id_curso = c.id
+                                                    WHERE p.id = %s
+                                                    LIMIT 1
+                                                """, (int(user_id),))
+                                                fila = cursor.fetchone()
+
+                                                if fila:
+                                                    correo, contrasena, curso = fila
+                                                    best_match_response["correo"] = correo
+                                                    best_match_response["contrasena"] = contrasena
+                                                    app.logger.info(f"📤 Datos del profesor añadidos: correo={correo}, curso={curso}")
+                                                else:
+                                                    app.logger.warning(f"⚠️ No se encontraron datos del profesor con ID {user_id} en la base de datos.")
+                                    except Exception as db_error:
+                                        app.logger.error(f"❌ Error consultando datos del profesor en la BD: {db_error}", exc_info=True)
+
+
+
                                 best_match_response["message"] = "Se identifico correctamente al usuario."
                             else:
                                 app.logger.warning(f"Formato de nombre de archivo no reconocido para {identity_path}. No se pudo extraer ID/Rol.")
@@ -557,7 +592,30 @@ async def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo
             except Exception as e_rm:
                 app.logger.error(f"Error eliminando archivo temporal {captured_face_path}: {e_rm}")
 
+@app.route('/computadora-ip/<nombre>', methods=['GET'])
+def obtener_ip_por_nombre(nombre):
+    try:
+        conexion = psycopg2.connect(
+            host="localhost",
+            port=5432,
+            user="postgres",
+            password="teamomama123",  # cambia por tu contraseña real
+            dbname="db_reconocimiento"
+        )
+        cursor = conexion.cursor()
+        cursor.execute("SELECT ip FROM computadora WHERE nombre = %s", (nombre,))
+        resultado = cursor.fetchone()
+        cursor.close()
+        conexion.close()
 
+        if resultado:
+            return jsonify({"ip": resultado[0]})
+        else:
+            return jsonify({"error": "No se encontró la computadora"}), 404
+
+    except Exception as e:
+        return jsonify({'mensaje': f'Error al obtener IP: {str(e)}'}), 500  
+    
 def descargar_imagen(url, nombre_archivo):
     """
     Descarga una imagen desde una URL y la guarda con un nombre de archivo.
@@ -638,6 +696,7 @@ async def obtener_usuarios(id_horario):
         return jsonify({"usuarios": usuarios_list}), 200
     except Exception as e:
         return jsonify({'mensaje': f'Error al obtener usuarios: {str(e)}'}), 500
+    
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)      

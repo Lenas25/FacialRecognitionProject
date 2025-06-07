@@ -8,4 +8,5 @@ endpoints = {
     "desconocido": url + "desconocido",
     "usuarios": url + "usuarios",
     "ia": url + "ia",
+    "ip_computadora": url + "computadora-ip"
   }
