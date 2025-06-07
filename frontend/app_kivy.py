@@ -155,7 +155,7 @@ class CamaraScreen(Screen):
         self.yolo_model = YOLO(self.model_path)
         self.centro_x_imagen = 0.5
         self.tolerancia_x = 0.2
-        self.varianza_laplace_minima = 0.9 #TODO: Cambiar a un valor más adecuado
+        self.varianza_laplace_minima = 0.1 #TODO: Cambiar a un valor más adecuado
 
     def calcular_varianza_laplace(self, imagen):
         """
@@ -250,10 +250,10 @@ class CamaraScreen(Screen):
         self.hora_label.text = current_time_str
 
         if self.storage.exists('horario_dia'):
-            self.verificar_horario(now, 0)
+            self.verificar_horario(now, 0, 2)
 
     # esta funcion verifica si la hora actual se encuentra en el rango de horario del dia de hoy, si es asi se activa la deteccion de rostro, si no y esta en la final de hora se envia el reporte de la clase y se guarda la asistencia calculada por local
-    def verificar_horario(self, hora_actual, minutos_antes=5):
+    def verificar_horario(self, hora_actual, minutos_antes=2, minutos_despues=2):
         self.storage = JsonStore('local.json')
         self.storage_asistencia = JsonStore('asistencia.json')
         
@@ -291,7 +291,6 @@ class CamaraScreen(Screen):
             print(f"Verificando horario {hora_actual}: {horario['id']} de {hora_antes} a {hora_despues}")
             if hora_actual_str == hora_antes_str:
                 self.actualizar_lista_alumnos(horario['id'])
-                self.detectar_rostro = True
                 print("Inicio nuevo curso, enviando lista de alumnos...")
                 break
             elif hora_antes_str < hora_actual_str <= hora_fin_str:

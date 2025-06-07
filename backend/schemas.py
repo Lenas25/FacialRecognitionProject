@@ -83,6 +83,7 @@ class AsistenciaAlumno(db.Model):
     id_alumno = Column(BigInteger, ForeignKey('alumno.id'))
     fecha = Column(Date)
     estado = Column(Enum('presente', 'ausente', 'tarde'))
+    tiempo_permanencia = Column(Time)
     
     horario = relationship("Horario", back_populates="asistencia_alumnos")
     alumno = relationship("Alumno", back_populates="asistencia")
@@ -94,6 +95,7 @@ class AsistenciaProfesor(db.Model):
     id_profesor = Column(BigInteger, ForeignKey('profesor.id'))
     fecha = Column(Date)
     estado = Column(Enum('presente', 'ausente', 'tarde'))
+    tiempo_permanencia = Column(Time)
     
     horario = relationship("Horario", back_populates="asistencia_profesores")
     profesor = relationship("Profesor", back_populates="asistencia")
