@@ -19,7 +19,6 @@ from ultralytics import YOLO
 import requests
 from kivy.storage.jsonstore import JsonStore
 from endpoints import endpoints
-import datetime
 from flask import jsonify
 import os
 from dotenv import load_dotenv
@@ -27,6 +26,9 @@ import cloudinary
 import cloudinary.uploader
 from cloudinary.utils import cloudinary_url
 import time
+from datetime import datetime, timedelta
+from threading import Thread
+from threading import Lock
 
 load_dotenv()
 
@@ -43,6 +45,8 @@ cloudinary.config(
 class InicioSesionScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.horarios_iniciados = {}
+        self.horarios_procesados_cierre = {}
         self.app = App.get_running_app()
         
     # Esta funcion se ejecuta cuando se da click en el boton de guardar, y tambien en local guarda el salon y el horario actual
@@ -97,7 +101,7 @@ class InicioSesionScreen(Screen):
         popup.open()
     
     def obtener_dia_semana(self):
-        dia_ingles = datetime.datetime.now().strftime('%A').lower()
+        dia_ingles = datetime.now().strftime('%A').lower()
         dias_espanol = {
             'monday': 'lunes',
             'tuesday': 'martes',
@@ -128,6 +132,7 @@ class CamaraScreen(Screen):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.lock_envio_profesor = Lock()
         self.app = App.get_running_app()
         self.asistencias = []
         self.detectar_rostro = False
@@ -245,7 +250,7 @@ class CamaraScreen(Screen):
     # esta funcion sirve para poder actualizar la hora cada segundo y cada minuto se verifica si la hora actual se encuentra o no en el rango de la clase del dia de hoy
     def actualizar_hora(self, dt):
         self.storage = JsonStore('local.json')
-        now = datetime.datetime.now()
+        now = datetime.now()
         current_time_str = now.strftime('%H:%M:%S')
         self.hora_label.text = current_time_str
 
@@ -254,67 +259,92 @@ class CamaraScreen(Screen):
 
     # esta funcion verifica si la hora actual se encuentra en el rango de horario del dia de hoy, si es asi se activa la deteccion de rostro, si no y esta en la final de hora se envia el reporte de la clase y se guarda la asistencia calculada por local
     def verificar_horario(self, hora_actual, minutos_antes=2, minutos_despues=2):
+
         self.storage = JsonStore('local.json')
         self.storage_asistencia = JsonStore('asistencia.json')
-        
+
+        if not self.storage.exists('horario_dia'):
+            print("⚠️ No hay horarios cargados para hoy.")
+            return
+
         horarios_hoy = self.storage.get('horario_dia')['horario_dia']
+
+        mejor_horario = None
+        mejor_inicio = None
+        mejor_fin = None
+
         for horario in horarios_hoy:
             hora_inicio_str = horario["hora_inicio"]
             hora_fin_str = horario["hora_fin"]
 
             try:
-                hora_inicio = datetime.datetime.strptime(hora_inicio_str, "%H:%M:%S").time()
+                hora_inicio = datetime.strptime(hora_inicio_str, "%H:%M:%S").time()
             except ValueError:
-                hora_inicio = datetime.datetime.strptime(hora_inicio_str, "%H:%M").time()
+                hora_inicio = datetime.strptime(hora_inicio_str, "%H:%M").time()
+
             try:
-                hora_fin = datetime.datetime.strptime(hora_fin_str, "%H:%M:%S").time()
+                hora_fin = datetime.strptime(hora_fin_str, "%H:%M:%S").time()
             except ValueError:
-                hora_fin = datetime.datetime.strptime(hora_fin_str, "%H:%M").time()
+                hora_fin = datetime.strptime(hora_fin_str, "%H:%M").time()
 
             fecha_hoy = hora_actual.date()
-            
-            hora_inicio_dt = datetime.datetime.combine(fecha_hoy, hora_inicio)
-            hora_fin_dt = datetime.datetime.combine(fecha_hoy, hora_fin)
-            
-            hora_antes = hora_inicio_dt - datetime.timedelta(minutes=minutos_antes)
-            hora_despues = hora_fin_dt + datetime.timedelta(minutes=2)
-            
-            # Convertimos TODO a string aquí
-            hora_actual_str = hora_actual.strftime("%H:%M:%S")
-            hora_antes_str = hora_antes.strftime("%H:%M:%S")
-            hora_inicio_str = hora_inicio_dt.strftime("%H:%M:%S")
-            hora_fin_str = hora_fin_dt.strftime("%H:%M:%S")
-            hora_despues_str = hora_despues.strftime("%H:%M:%S")
+            hora_inicio_dt = datetime.combine(fecha_hoy, hora_inicio)
+            hora_fin_dt = datetime.combine(fecha_hoy, hora_fin)
 
+            hora_antes_dt = hora_inicio_dt - timedelta(minutes=minutos_antes)
+            hora_despues_dt = hora_fin_dt + timedelta(minutes=minutos_despues)
+
+            if hora_antes_dt <= hora_actual <= hora_despues_dt:
+                if mejor_inicio is None or hora_inicio_dt < mejor_inicio:
+                    mejor_horario = horario
+                    mejor_inicio = hora_inicio_dt
+                    mejor_fin = hora_fin_dt
+
+        if mejor_horario:
+            id_horario = mejor_horario['id']
+            hora_actual_str = hora_actual.strftime('%H:%M:%S')
             print("SE VERIFICA")
-            # si la hora actual esta entre ese rango entonces sigue detectando rostros
-            print(f"Verificando horario {hora_actual}: {horario['id']} de {hora_antes} a {hora_despues}")
-            if hora_actual_str == hora_antes_str:
-                self.actualizar_lista_alumnos(horario['id'])
+            print(f"Verificando horario {hora_actual_str}: {id_horario} de {mejor_inicio.strftime('%H:%M:%S')} a {(mejor_fin + timedelta(minutes=2)).strftime('%H:%M:%S')}")
+
+            # Guardar horario actual para uso en reconocer_rostro()
+            self.storage.put("horario_actual", horario=mejor_horario)
+
+            # Inicializamos control si no existe
+            if not hasattr(self, 'horarios_procesados_inicio'):
+                self.horarios_procesados_inicio = {}
+
+            if not hasattr(self, 'horarios_procesados_cierre'):
+                self.horarios_procesados_cierre = {}
+
+            if hora_actual >= mejor_inicio - timedelta(minutes=minutos_antes) and not self.horarios_procesados_inicio.get(id_horario, False):
+                self.actualizar_lista_alumnos(id_horario)
+                self.horarios_procesados_inicio[id_horario] = True
+                self.detectar_rostro = True
                 print("Inicio nuevo curso, enviando lista de alumnos...")
-                break
-            elif hora_antes_str < hora_actual_str <= hora_fin_str:
+
+            elif mejor_inicio <= hora_actual <= mejor_fin:
                 self.detectar_rostro = True
                 print("En el rango, detectando rostro...")
-                break
-            elif hora_fin_str < hora_actual_str <= hora_despues_str:
-                if not self.horarios_procesados_cierre.get(horario['id'], False):
-                    self.detectar_rostro = False 
-                    print(f"Fuera del rango para {horario['id']}, guardando asistencia y enviando reporte...")
 
-                    self.horarios_procesados_cierre[horario['id']] = True
-
-                    self.guardar_asistencia(horario['id'])
-                    self.guardar_desconocidos(horario['id'])
-                    self.enviar_reporte(horario['id'])
-                    self.mostrar_popup("Reporte", f"Reporte enviado y asistencia guardada para {horario['id']}.", type="reporte")
+            elif mejor_fin < hora_actual <= mejor_fin + timedelta(minutes=2):
+                if not self.horarios_procesados_cierre.get(id_horario, False):
+                    self.detectar_rostro = False
+                    print(f"Fuera del rango para {id_horario}, guardando asistencia y enviando reporte...")
+                    self.horarios_procesados_cierre[id_horario] = True
+                    self.guardar_asistencia(id_horario)
+                    self.guardar_desconocidos(id_horario)
+                    self.enviar_reporte(id_horario)
+                    self.mostrar_popup("Reporte", f"Reporte enviado y asistencia guardada para {id_horario}.", type="reporte")
                     self.eliminar_imagenes()
                     self.storage_asistencia.clear()
-                    break
-            elif hora_actual_str > hora_despues_str and not self.horarios_procesados_cierre.get(horario['id'], False):
-                self.detectar_rostro = False
-                print(f"Clase {horario['id']} ya terminada y fuera del rango de cierre. Asegurando que detectar_rostro es False.")
-                self.horarios_procesados_cierre[horario['id']] = True
+
+            elif hora_actual > mejor_fin + timedelta(minutes=2):
+                if not self.horarios_procesados_cierre.get(id_horario, False):
+                    self.detectar_rostro = False
+                    print(f"Clase {id_horario} ya terminada y fuera del rango de cierre. Asegurando que detectar_rostro es False.")
+                    self.horarios_procesados_cierre[id_horario] = True
+
+
     
     def actualizar_lista_alumnos(self, id_horario):
         response = requests.get(f'{endpoints["usuarios"]}/{id_horario}')
@@ -346,75 +376,152 @@ class CamaraScreen(Screen):
                             print(f"Error al eliminar el archivo {file_path}: {e}")
     
     def reconocer_rostro(self, frame):
-        """
-        Envía un frame al backend para reconocimiento facial y procesa la respuesta.
-
-        :param frame: El frame de la cámara (se espera que sea un array NumPy de OpenCV).
-        """
-        if frame is None:
-            print("FRONTEND: Se recibió un frame nulo. No se puede procesar.")
-            return
-        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  
-        api_url = endpoints.get("ia")
-        if not api_url:
-            print("FRONTEND: La URL del endpoint 'IA' no está configurada.")
-            return
-
-        try:
-            # 1. Codificar el frame a formato JPG (o PNG) para enviarlo.
-            #    DeepFace usualmente trabaja bien con JPG.
-            success, encoded_image = cv2.imencode('.jpg', frame)
-            if not success:
-                print("FRONTEND: No se pudo codificar el frame a JPG.")
+            if frame is None:
+                print("FRONTEND: Se recibió un frame nulo. No se puede procesar.")
                 return
 
-            # El backend espera 'image_file' como nombre del campo del archivo.
-            files_to_send = {'image_file': ('captured_frame.jpg', encoded_image.tobytes(), 'image/jpeg')}
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            api_url = endpoints.get("ia")
+            if not api_url:
+                print("FRONTEND: La URL del endpoint 'IA' no está configurada.")
+                return
 
-            print(f"FRONTEND: Enviando frame a {api_url} para reconocimiento...")
+            try:
+                success, encoded_image = cv2.imencode('.jpg', frame)
+                if not success:
+                    print("FRONTEND: No se pudo codificar el frame a JPG.")
+                    return
 
-            # 2. Realizar la solicitud POST al backend.
-            #    Es buena idea añadir un timeout a la solicitud.
-            response = requests.post(api_url, files=files_to_send, timeout=15) # Timeout de 15 segundos
+                files_to_send = {'image_file': ('captured_frame.jpg', encoded_image.tobytes(), 'image/jpeg')}
 
-            # Verificar si la solicitud fue exitosa (códigos 2xx)
-            response.raise_for_status() # Esto lanzará una excepción para códigos 4xx/5xx
+                print(f"FRONTEND: Enviando frame a {api_url} para reconocimiento...")
+                response = requests.post(api_url, files=files_to_send, timeout=15)
+                response.raise_for_status()
 
-            # 3. Procesar la respuesta JSON del backend.
-            datos_respuesta = response.json()
-            print(f"FRONTEND: Respuesta recibida del backend: {datos_respuesta}")
+                datos_respuesta = response.json()
+                print(f"FRONTEND: Respuesta recibida del backend: {datos_respuesta}")
 
-            # 4. Verificar si la persona fue clasificada.
-            if datos_respuesta.get('clasificado') is True:
-                print(f"FRONTEND: Persona reconocida: ID={datos_respuesta.get('id')}, Rol={datos_respuesta.get('rol')}")
-                # Llamar a la función para guardar la asistencia con los datos recibidos.
-                self.guardar_asistencia_local(datos_respuesta)
-                return datos_respuesta
+                if datos_respuesta.get('clasificado') is True:
+                    print(f"FRONTEND: Persona reconocida: ID={datos_respuesta.get('id')}, Rol={datos_respuesta.get('rol')}")
+                    self.guardar_asistencia_local(datos_respuesta)
+
+                    if datos_respuesta.get('rol') == 'profesor':
+                        print("DEBUG: Profesor detectado correctamente")
+                        self.storage = JsonStore('local.json')
+
+                        # ✅ Leer el horario actual ya validado desde local.json
+                        if self.storage.exists("horario_actual"):
+                            horario_actual = self.storage.get("horario_actual")["horario"]
+                            print(f"DEBUG: Horario usado: {horario_actual}")
+
+                            # ✅ Ejecutar el envío en segundo plano
+                            hilo_envio = Thread(target=self.enviar_datos_profesor, args=(datos_respuesta, horario_actual))
+                            hilo_envio.start()
+                        else:
+                            print("ERROR: No se encontró 'horario_actual' en local.json")
+                    return datos_respuesta
+                else:
+                    message = datos_respuesta.get('message', 'Persona no reconocida o similitud baja.')
+                    print(f"FRONTEND: {message} ID={datos_respuesta.get('id')}, Rol={datos_respuesta.get('rol')}")
+                    return datos_respuesta
+
+            except requests.exceptions.HTTPError as http_err:
+                print(f"FRONTEND: Error HTTP al contactar el API de IA: {http_err}")
+                if http_err.response is not None:
+                    print(f"FRONTEND: Respuesta del servidor: {http_err.response.text}")
+            except requests.exceptions.ConnectionError as conn_err:
+                print(f"FRONTEND: Error de conexión con el API de IA: {conn_err}")
+            except requests.exceptions.Timeout as timeout_err:
+                print(f"FRONTEND: Timeout esperando respuesta del API de IA: {timeout_err}")
+            except requests.exceptions.RequestException as req_err:
+                print(f"FRONTEND: Error en la solicitud al API de IA: {req_err}")
+            except ValueError as json_err:
+                print(f"FRONTEND: Error decodificando JSON de la respuesta del API de IA: {json_err}")
+            except Exception as e:
+                print(f"FRONTEND: Ocurrió un error inesperado en reconocer_rostro: {e}")
+
+
+
+    def enviar_datos_profesor(self, datos_profesor, horario):
+        with self.lock_envio_profesor:
+            try:
+                self.storage = JsonStore('local.json')
+                salon = self.storage.get("salon")["salon"]
+                print(f"DEBUG: Nombre del salón recuperado = {salon}")
+
+                ip_computadora = self.obtener_ip_computadora(salon)
+                print(f"DEBUG: IP recibida desde backend = {ip_computadora}")
+
+                if not ip_computadora:
+                    print("ERROR: IP de computadora no encontrada, abortando envío.")
+                    return
+
+                # 🗓️ Incluir fecha en la clave del horario
+                from datetime import datetime
+                fecha_hoy = datetime.now().strftime("%Y-%m-%d")
+                clave_horario = f"{fecha_hoy}_{horario['hora_inicio']}_{horario['hora_fin']}"
+
+                if self.storage.exists("envios_realizados"):
+                    ya_enviados = self.storage.get("envios_realizados")["horarios"]
+                    if clave_horario in ya_enviados:
+                        print(f"INFO: Ya se enviaron los parámetros para el horario {clave_horario}, no se enviará de nuevo.")
+                        return
+                else:
+                    self.storage.put("envios_realizados", horarios=[])
+
+                payload = {
+                    "correo": datos_profesor.get("correo"),
+                    "contrasena": datos_profesor.get("contrasena"),
+                    "curso": horario.get("curso"),
+                    "hora_inicio": horario.get("hora_inicio"),
+                    "hora_fin": horario.get("hora_fin")
+                }
+
+                print(f"DEBUG: Payload a enviar = {payload}")
+                url = f"http://{ip_computadora}:5000/iniciar"
+
+                max_retries = 30
+                delay = 3
+                for intento in range(max_retries):
+                    try:
+                        print(f"DEBUG: Intento {intento+1} de conexión a {url}")
+                        response = requests.post(url, json=payload, timeout=10)
+                        if response.status_code == 200:
+                            print(f"DEBUG: Respuesta del servidor: {response.status_code} - {response.text}")
+                            # ✅ Marcar como enviado
+                            ya_enviados = self.storage.get("envios_realizados")["horarios"]
+                            ya_enviados.append(clave_horario)
+                            self.storage.put("envios_realizados", horarios=ya_enviados)
+                            return
+                    except requests.exceptions.ConnectionError:
+                        print("INFO: La computadora de automatización no está disponible. Reintentando...")
+                        time.sleep(delay)
+                    except Exception as e:
+                        print(f"ERROR: Fallo inesperado durante envío: {e}")
+                        return
+
+                print("ERROR: No se logró conectar tras múltiples intentos.")
+
+            except Exception as e:
+                import traceback
+                print("ERROR: Excepción durante el envío al servidor.")
+                traceback.print_exc()
+            
+    def obtener_ip_computadora(self, salon):
+        try:
+            response = requests.get(f"{endpoints['ip_computadora']}/{salon}", timeout=5)
+            if response.status_code == 200:
+                ip = response.json().get("ip")
+                print(f"DEBUG: IP recibida desde backend: {ip}")
+                return ip
             else:
-                # Si no fue clasificado, el backend ya debería haber guardado la imagen
-                # en la carpeta de desconocidos (según la lógica del backend).
-                message = datos_respuesta.get('message', 'Persona no reconocida o similitud baja.')
-                print(f"FRONTEND: {message} ID={datos_respuesta.get('id')}, Rol={datos_respuesta.get('rol')}")
-                return datos_respuesta
-                
-
-        except requests.exceptions.HTTPError as http_err:
-            # Error específico de HTTP (ej. 400, 404, 500)
-            print(f"FRONTEND: Error HTTP al contactar el API de IA: {http_err}")
-            if http_err.response is not None:
-                print(f"FRONTEND: Respuesta del servidor: {http_err.response.text}")
-        except requests.exceptions.ConnectionError as conn_err:
-            print(f"FRONTEND: Error de conexión con el API de IA: {conn_err}")
-        except requests.exceptions.Timeout as timeout_err:
-            print(f"FRONTEND: Timeout esperando respuesta del API de IA: {timeout_err}")
-        except requests.exceptions.RequestException as req_err:
-            # Otro tipo de error de la librería requests
-            print(f"FRONTEND: Error en la solicitud al API de IA: {req_err}")
-        except ValueError as json_err: # Si response.json() falla
-            print(f"FRONTEND: Error decodificando JSON de la respuesta del API de IA: {json_err}")
+                print(f"ERROR: IP no encontrada para el salón {salon}")
+                return None
         except Exception as e:
-            # Cualquier otra excepción inesperada
-            print(f"FRONTEND: Ocurrió un error inesperado en reconocer_rostro: {e}")
+            print(f"ERROR: Excepción al obtener IP: {e}")
+            return None
+
+
     
     def calcular_asistencia(self, minutos):
         self.storage_asistencia = JsonStore('asistencia.json')
@@ -608,7 +715,7 @@ class ReconocimientoFacialApp(App):
             self.sm.current = 'inicio_sesion_screen'
     
     def obtener_dia_semana(self):
-        dia_ingles = datetime.datetime.now().strftime('%A').lower()
+        dia_ingles = datetime.now().strftime('%A').lower()
         dias_espanol = {
             'monday': 'lunes',
             'tuesday': 'martes',
@@ -632,6 +739,7 @@ class ReconocimientoFacialApp(App):
     
     def on_stop(self):
         self.storage.close()
+    
 
 if __name__ == '__main__':
     ReconocimientoFacialApp().run()

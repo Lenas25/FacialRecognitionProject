@@ -11,6 +11,7 @@ class Salon(db.Model):
     pabellon = Column(String(50))
     
     horarios = relationship("Horario", back_populates="salon")
+    computadoras = relationship("Computadora", back_populates="salon")
     
 class Horario(db.Model):
     __tablename__ = 'horario'
@@ -99,3 +100,12 @@ class AsistenciaProfesor(db.Model):
     
     horario = relationship("Horario", back_populates="asistencia_profesores")
     profesor = relationship("Profesor", back_populates="asistencia")
+
+class Computadora(db.Model):
+    __tablename__ = 'computadora'
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    nombre = Column(String(50))
+    id_salon = Column(BigInteger, ForeignKey('salon.id'))
+    ip = Column(String(30))
+    
+    salon = relationship("Salon", back_populates="computadoras")

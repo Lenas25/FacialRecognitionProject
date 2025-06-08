@@ -1,6 +1,6 @@
 # backend/app_flask.py
 from flask import Flask, jsonify, request
-from schemas import Salon, AsistenciaAlumno, AsistenciaProfesor, Horario, Desconocido, Matricula, Curso, Alumno, Profesor
+from schemas import Salon, AsistenciaAlumno, AsistenciaProfesor, Horario, Desconocido, Matricula, Curso, Alumno, Profesor, Computadora
 from database import db
 import os
 import pandas as pd
@@ -13,7 +13,7 @@ from email.mime.text import MIMEText
 from email.mime.base import MIMEBase
 from email import encoders
 from twilio.rest import Client
-import datetime
+from datetime import datetime, timedelta
 import shutil
 import os
 import re # For a more robust parsing
@@ -21,7 +21,7 @@ from dotenv import load_dotenv
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor  # Para descarga concurrent
 import asyncio
-
+import psycopg2
 load_dotenv()
 
 app = Flask(__name__)
@@ -171,7 +171,7 @@ async def registrar_asistencia(id_horario):
     new_asistencias_profesores = []
     # si es alumno 0 y si es profesor 1
     for item in data:
-        fecha = datetime.datetime.now().strftime('%Y-%m-%d')
+        fecha = datetime.now().strftime('%Y-%m-%d')
         if item['rol'] == 0:
             new_asistencias_alumnos.append(AsistenciaAlumno(
                 id_horario=id_horario,
@@ -215,7 +215,7 @@ async def registrar_desconocido(id_horario):
         new_desconocidos.append(Desconocido(
             id_horario=id_horario,
             url_img=url,
-            fecha=datetime.datetime.now().strftime("%Y-%m-%d"),
+            fecha=datetime.now().strftime("%Y-%m-%d"),
             )
         )
 
@@ -238,15 +238,15 @@ async def enviar_reporte(salon, id_horario):
     try:
         alumnos = AsistenciaAlumno.query.filter(
             id_horario == id_horario,
-            AsistenciaAlumno.fecha == datetime.datetime.now().date()
+            AsistenciaAlumno.fecha == datetime.now().date()
         ).all()
         profesores = AsistenciaProfesor.query.filter(
             id_horario == id_horario,
-            AsistenciaAlumno.fecha == datetime.datetime.now().date()
+            AsistenciaAlumno.fecha == datetime.now().date()
         ).all()
         desconocidos = Desconocido.query.filter(
             id_horario == id_horario,
-            Desconocido.fecha == datetime.datetime.now().date()
+            Desconocido.fecha == datetime.now().date()
         ).all()
 
         df_desconocidos = pd.DataFrame([(d.id_horario, d.url_img, d.fecha.strftime('%Y-%m-%d')) for d in desconocidos],
@@ -351,7 +351,7 @@ async def enviar_mensaje(id_horario):
     alumnos_ausentes = AsistenciaAlumno.query.filter(
         AsistenciaAlumno.id_horario == id_horario, 
         AsistenciaAlumno.estado == 'ausente',
-        AsistenciaAlumno.fecha == datetime.datetime.now().date()
+        AsistenciaAlumno.fecha == datetime.now().date()
         ).all()
     for alumno_ausente in alumnos_ausentes:
         alumno = alumno_ausente.alumno
@@ -418,7 +418,7 @@ async def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo
             elif not all(face_obj.get("is_real", False) for face_obj in face_objs):
                 app.logger.warning("Anti-spoofing: Se detectó una posible imagen falsa (spoof).")
                 best_match_response["message"] = "La imagen parece ser un intento de spoofing (falsa)."
-                # Para un intento de spoof, no procedemos a `DeepFace.find`
+                # Para un intento de spoof, no procedemos a DeepFace.find
                 return jsonify(best_match_response), 200 # O un 403 Forbidden si es más apropiado
             else:
                 app.logger.info("Anti-spoofing: La imagen parece ser real.")
@@ -481,7 +481,7 @@ async def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo
                              # o si usa un nombre genérico. Hay que revisar la salida exacta.
                              # Si no encuentra la columna específica, intentamos con 'distance' o la primera numérica después de 'identity'
                              # Por ahora, asumimos que la columna existe o DeepFace usa un default conocido.
-                             # Si es `cosine`, `euclidean`, `euclidean_l2` y está en columnas, la tomamos.
+                             # Si es cosine, euclidean, euclidean_l2 y está en columnas, la tomamos.
                             if DISTANCE_METRIC in best_match_candidate_df.columns:
                                 distance_col_name = DISTANCE_METRIC
                             else: # Fallback a un nombre genérico si la construcción falla
@@ -510,7 +510,42 @@ async def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo
                                 best_match_response["rol"] = user_rol
                                 best_match_response["clasificado"] = True
                                 best_match_response["distance"] = round(float(distance), 4)
+                                best_match_response["message"] = "Se identificó correctamente al usuario."
                                 app.logger.info(f"✅ Persona clasificada: ID={user_id}, Rol={user_rol}, Distancia={distance:.4f}")
+
+                                # ✅ Solo si es profesor, buscar datos adicionales
+                                if user_rol == 'profesor':
+                                    try:
+                                        with psycopg2.connect(
+                                            host="localhost",
+                                            port=5432,
+                                            user="postgres",
+                                            password="teamomama123",
+                                            dbname="db_reconocimiento"
+                                        ) as conn:
+                                            with conn.cursor() as cursor:
+                                                cursor.execute("""
+                                                    SELECT p.correo, p.contrasena, c.nombre
+                                                    FROM profesor p
+                                                    JOIN horario h ON p.id = h.id_profesor
+                                                    JOIN curso c ON h.id_curso = c.id
+                                                    WHERE p.id = %s
+                                                    LIMIT 1
+                                                """, (int(user_id),))
+                                                fila = cursor.fetchone()
+
+                                                if fila:
+                                                    correo, contrasena, curso = fila
+                                                    best_match_response["correo"] = correo
+                                                    best_match_response["contrasena"] = contrasena
+                                                    app.logger.info(f"📤 Datos del profesor añadidos: correo={correo}, curso={curso}")
+                                                else:
+                                                    app.logger.warning(f"⚠️ No se encontraron datos del profesor con ID {user_id} en la base de datos.")
+                                    except Exception as db_error:
+                                        app.logger.error(f"❌ Error consultando datos del profesor en la BD: {db_error}", exc_info=True)
+
+
+
                                 best_match_response["message"] = "Se identifico correctamente al usuario."
                             else:
                                 app.logger.warning(f"Formato de nombre de archivo no reconocido para {identity_path}. No se pudo extraer ID/Rol.")
@@ -541,7 +576,7 @@ async def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo
             try:
                 os.makedirs(RUTA_DESCONOCIDOS_CLASE_ACTUAL, exist_ok=True)
                 # Usar un nombre único para la imagen guardada
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 unknown_filename = f"unknown_{timestamp}.jpg"
                 destination_path = os.path.join(RUTA_DESCONOCIDOS_CLASE_ACTUAL, unknown_filename)
                 shutil.copy(captured_face_path, destination_path)
@@ -571,7 +606,18 @@ async def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo
             except Exception as e_rm:
                 app.logger.error(f"Error eliminando archivo temporal {captured_face_path}: {e_rm}")
 
+@app.route('/computadora-ip/<nombre>', methods=['GET'])
+def obtener_ip_por_nombre(nombre):
+    try:
+        computadora = Computadora.query.filter_by(nombre=nombre).first()
+        if computadora:
+            return jsonify({"ip": computadora.ip}), 200
+        else:
+            return jsonify({"error": "No se encontró la computadora"}), 404
 
+    except Exception as e:
+        return jsonify({'mensaje': f'Error al obtener IP: {str(e)}'}), 500  
+    
 def descargar_imagen(url, nombre_archivo):
     """
     Descarga una imagen desde una URL y la guarda con un nombre de archivo.
@@ -652,6 +698,7 @@ async def obtener_usuarios(id_horario):
         return jsonify({"usuarios": usuarios_list}), 200
     except Exception as e:
         return jsonify({'mensaje': f'Error al obtener usuarios: {str(e)}'}), 500
+    
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)      
