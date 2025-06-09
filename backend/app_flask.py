@@ -516,31 +516,14 @@ async def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo
                                 # ✅ Solo si es profesor, buscar datos adicionales
                                 if user_rol == 'profesor':
                                     try:
-                                        with psycopg2.connect(
-                                            host="localhost",
-                                            port=5432,
-                                            user="postgres",
-                                            password="teamomama123",
-                                            dbname="db_reconocimiento"
-                                        ) as conn:
-                                            with conn.cursor() as cursor:
-                                                cursor.execute("""
-                                                    SELECT p.correo, p.contrasena, c.nombre
-                                                    FROM profesor p
-                                                    JOIN horario h ON p.id = h.id_profesor
-                                                    JOIN curso c ON h.id_curso = c.id
-                                                    WHERE p.id = %s
-                                                    LIMIT 1
-                                                """, (int(user_id),))
-                                                fila = cursor.fetchone()
-
-                                                if fila:
-                                                    correo, contrasena, curso = fila
-                                                    best_match_response["correo"] = correo
-                                                    best_match_response["contrasena"] = contrasena
-                                                    app.logger.info(f"📤 Datos del profesor añadidos: correo={correo}, curso={curso}")
-                                                else:
-                                                    app.logger.warning(f"⚠️ No se encontraron datos del profesor con ID {user_id} en la base de datos.")
+                                        profesor = db.session.query(Profesor, Horario, Curso).join(Horario, Profesor.id == Horario.id_profesor).join(Curso, Horario.id_curso == Curso.id).filter(Profesor.id == int(user_id)).first()
+                                        if profesor:
+                                            p, h, c = profesor
+                                            best_match_response["correo"] = p.codigo
+                                            best_match_response["contrasena"] = p.contrasena
+                                            app.logger.info(f"📤 Datos del profesor añadidos: correo={p.correo}, curso={c.nombre}")
+                                        else:
+                                            app.logger.warning(f"⚠️ No se encontraron datos del profesor con ID {user_id} en la base de datos.")
                                     except Exception as db_error:
                                         app.logger.error(f"❌ Error consultando datos del profesor en la BD: {db_error}", exc_info=True)
 

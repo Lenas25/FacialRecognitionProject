@@ -453,7 +453,8 @@ class CamaraScreen(Screen):
                 print(f"DEBUG: IP recibida desde backend = {ip_computadora}")
 
                 if not ip_computadora:
-                    print("ERROR: IP de computadora no encontrada, abortando envío.")
+                    print("ERROR: No se encontró la computadora del salón. Por favor, solicite asistencia técnica.")
+                    self.mostrar_popup("Error", "No se encontró la computadora del salón. Por favor, solicite asistencia técnica.")
                     return
 
                 # 🗓️ Incluir fecha en la clave del horario
@@ -480,7 +481,7 @@ class CamaraScreen(Screen):
                 print(f"DEBUG: Payload a enviar = {payload}")
                 url = f"http://{ip_computadora}:5000/iniciar"
 
-                max_retries = 30
+                max_retries = 3
                 delay = 3
                 for intento in range(max_retries):
                     try:
@@ -537,7 +538,7 @@ class CamaraScreen(Screen):
         for registro in self.storage_asistencia.get("asistencia")["asistencia"]:
             usuario_id = registro['id']
             rol = registro['rol']
-            hora_detectado = datetime.datetime.strptime(registro['hora_detectado'], "%H:%M:%S")
+            hora_detectado = datetime.strptime(registro['hora_detectado'], "%H:%M:%S")
 
             if usuario_id not in tiempos_por_usuario:
                 tiempos_por_usuario[usuario_id] = {'rol': rol, 'ingreso': None, 'tiempo_total': 0}
@@ -589,7 +590,7 @@ class CamaraScreen(Screen):
         self.storage_asistencia = JsonStore('asistencia.json')
         
         # de datos se recibe solo la id y el rol
-        datos["hora_detectado"] = datetime.datetime.now().strftime("%H:%M:%S")
+        datos["hora_detectado"] = datetime.now().strftime("%H:%M:%S")
         self.asistencias = self.storage_asistencia.get("asistencia")["asistencia"] if self.storage_asistencia.exists("asistencia") else []
         self.asistencias.append(datos)
         self.storage_asistencia.put("asistencia", asistencia=self.asistencias)

@@ -21,10 +21,12 @@ class Horario(db.Model):
     hora_fin = Column(Time)
     id_salon = Column(BigInteger, ForeignKey('salon.id'))
     id_curso = Column(BigInteger, ForeignKey('curso.id'))
+    id_profesor = Column(BigInteger, ForeignKey('profesor.id'))
     
     
     salon = relationship("Salon", back_populates="horarios")
     curso = relationship("Curso", back_populates="horarios")
+    profesor = relationship("Profesor", back_populates="horarios")
     asistencia_alumnos = relationship("AsistenciaAlumno", back_populates="horario")
     asistencia_profesores = relationship("AsistenciaProfesor", back_populates="horario")
     desconocidos = relationship("Desconocido",back_populates="horario")
@@ -76,6 +78,7 @@ class Profesor(db.Model):
     codigo = Column(String(20))
     
     asistencia = relationship("AsistenciaProfesor", back_populates="profesor")
+    horarios = relationship("Horario", back_populates="profesor")
 
 class AsistenciaAlumno(db.Model):
     __tablename__ = 'asistencia_alumno'
