@@ -29,7 +29,7 @@
             size_hint_y: None
             text_size: self.width - dp(20), None
             valign: 'top' # Alinea el texto en la parte superior si ocupa varias líneas
-            height: self.texture_size[1] + dp(10) 
+            height: self.texture_size[1] + dp(10)
             padding: dp(20), dp(10), dp(20), 0
 
         Label:
@@ -37,15 +37,15 @@
             font_size: dp(16)
             halign: 'center'
             size_hint_y: None
-            text_size: self.width - dp(14), None 
+            text_size: self.width - dp(14), None
             valign: 'top'
             padding: dp(20), 0, dp(20), dp(10)
-            height: self.texture_size[1] + dp(20) 
-        
+            height: self.texture_size[1] + dp(20)
+
         GridLayout:
             cols: 2
             spacing: dp(20)
-            padding: dp(20), dp(10) 
+            padding: dp(20), dp(10)
             size_hint_y: None
             height: self.minimum_height # Ajusta la altura al contenido
 
@@ -53,10 +53,10 @@
                 text: "Salón:"
                 halign: 'left'
                 size_hint_y: None
-                text_size: self.width - dp(14), None 
+                text_size: self.width - dp(14), None
                 valign: 'top'
-                padding: dp(10), dp(10) 
-                height: self.texture_size[1] + dp(10) 
+                padding: dp(10), dp(10)
+                height: self.texture_size[1] + dp(10)
             FloatLayout:
                 canvas.before:
                     Color:
@@ -65,7 +65,7 @@
                         pos: self.x, self.y - dp(5)
                         size: self.width, self.height - dp(10)
                         radius: [dp(10)]  # Radio de las esquinas redondeadas
-                TextInput: 
+                TextInput:
                     id: salon_input
                     multiline: False
                     size_hint: 1, None
@@ -79,10 +79,10 @@
                 text: "Código de Administrador:"
                 halign: 'left'
                 size_hint_y: None
-                text_size: self.width - dp(14), None 
+                text_size: self.width - dp(14), None
                 valign: 'top'
-                padding: dp(10), dp(10) 
-                height: self.texture_size[1] + dp(10) 
+                padding: dp(10), dp(10)
+                height: self.texture_size[1] + dp(10)
             FloatLayout:
                 canvas.before:
                     Color:
@@ -114,24 +114,8 @@
                 RoundedRectangle:
                     pos: self.x, self.y - dp(5)
                     size: self.width + dp(5), self.height + dp(10)
-                    radius: [dp(10)] 
+                    radius: [dp(10)]
 
 
 <CamaraScreen>:
     name: 'camara_screen'
-
-<Popup>:
-    id: popup
-    title: "Mensaje"
-    size_hint: 0.8, 0.4
-    auto_dismiss: True
-    BoxLayout:
-        orientation: 'vertical'
-        Label:
-            id: popup_label
-            text: ""
-        Button:
-            text: "Cerrar"
-            size_hint_y: None
-            height: dp(40)
-            on_press: root.dismiss()

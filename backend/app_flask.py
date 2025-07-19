@@ -26,7 +26,7 @@ load_dotenv()
 
 app = Flask(__name__)
 
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:root@localhost:5432/db_reconocimiento'
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI')
 
 db.init_app(app)
 
@@ -37,7 +37,7 @@ RUTA_DESCONOCIDOS_CLASE_ACTUAL = 'desconocidos_clase_actual'
 MODEL_NAME = "VGG-Face"
 DETECTOR_BACKEND = "opencv" # O "ssd", "dlib", "mtcnn", "retinaface", "mediapipe", "yolov8", "yunet", "fastmtcnn"
 DISTANCE_METRIC = 'cosine' # 'cosine', 'euclidean', 'euclidean_l2'
-DISTANCE_THRESHOLD = 0.60 # Umbral de distancia. Ajusta esto según tus pruebas. Para VGG-Face y cosine, 0.4 es un buen punto de partida.
+DISTANCE_THRESHOLD = 0.60 # Umbral de distancia. Ajusta esto según tus pruebas. Para VGG-Face y cosine.
 
 if not os.path.exists(RUTA_CARPETA_IMAGENES):
     os.makedirs(RUTA_CARPETA_IMAGENES)
@@ -63,7 +63,7 @@ def parse_identity_filename(filename):
     """
     # Example: "persona_123_tipo_0.jpg"
     #          "persona_45_tipo_1.png" (extension might vary, handle it)
-    
+
     base_name = os.path.splitext(filename)[0] # Remove extension (e.g., .jpg, .png)
     parts = base_name.split('_')
 
@@ -80,7 +80,7 @@ def parse_identity_filename(filename):
             else:
                 app.logger.warning(f"Tipo desconocido '{tipo_num}' en el nombre de archivo: {filename}")
                 return None, None
-            
+
             return str(user_id), user_rol # Return ID as string to match "id" field type in response
         except ValueError:
             app.logger.error(f"Error al parsear ID o tipo de '{filename}'. No son números válidos.")
@@ -101,7 +101,7 @@ def parse_identity_filename(filename):
                 else: # Should not happen due to regex [01]
                     app.logger.warning(f"Tipo desconocido '{tipo_num}' en el nombre de archivo (regex): {filename}")
                     return None, None
-                
+
                 return user_id, user_rol
             except Exception as e:
                 app.logger.error(f"Error al parsear con regex ID o tipo de '{filename}': {e}")
@@ -208,7 +208,7 @@ async def registrar_desconocido(id_horario):
     horario = Horario.query.filter_by(id=id_horario).first()
     if not horario:
         return jsonify({"message": "Horario no encontrado."}), 404
-    
+
     new_desconocidos = []
 
     for url in data["url_img"]:
@@ -235,6 +235,15 @@ async def enviar_reporte(salon, id_horario):
     EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')
     RECIPIENT_EMAIL = os.getenv('RECIPIENT_EMAIL')
 
+
+    TEMP_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp_reports')
+    os.makedirs(TEMP_FOLDER, exist_ok=True) # Crea la carpeta si no existe
+
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    excel_filename = f'reporte_asistencia_{salon}_{id_horario}_{timestamp}.xlsx'
+    excel_filepath = os.path.join(TEMP_FOLDER, excel_filename)
+
     try:
         alumnos = AsistenciaAlumno.query.filter(
             id_horario == id_horario,
@@ -256,9 +265,7 @@ async def enviar_reporte(salon, id_horario):
         df_docentes = pd.DataFrame([(d.id, d.id_horario, d.id_profesor, d.estado, d.fecha.strftime('%Y-%m-%d'), d.tiempo_permanencia) for d in profesores],
                                    columns=['ID', 'Seccion', 'Código de Profesor', 'Estado', 'Fecha de Detección', 'Tiempo Asistencia (min)'])
 
-        excel_filename = 'reporte_asistencia.xlsx'
-
-        with pd.ExcelWriter(excel_filename, engine="xlsxwriter") as writer:
+        with pd.ExcelWriter(excel_filepath, engine="xlsxwriter") as writer:
             df_alumnos.to_excel(writer, sheet_name='Alumnos', index=False)
             df_docentes.to_excel(writer, sheet_name='Docentes', index=False)
             df_desconocidos.to_excel(writer, sheet_name='Desconocidos', index=False)
@@ -280,7 +287,7 @@ async def enviar_reporte(salon, id_horario):
             for sheet_name, df in zip(['Alumnos', 'Docentes', 'Desconocidos'],
                                     [df_alumnos, df_docentes, df_desconocidos]):
                 worksheet = writer.sheets[sheet_name]
-                
+
                 # Ajustar ancho de columnas y aplicar formato de encabezado
                 for i, col in enumerate(df.columns):
                     column_len = max(df[col].astype(str).map(len).max(), len(col))
@@ -300,24 +307,20 @@ async def enviar_reporte(salon, id_horario):
         # Cuerpo del correo (texto plano)
         cuerpo_texto = """
         Buenas tardes estimado,
-        
+
         El presente correo es para poder enviarle la lista de alumnos y docente que asistieron a la clase del dia de hoy. Asimismo
         adjunto se encuentra el archivo excel con los detalles correspondientes y el tiempo de permanencia de cada persona.
-        
+
         Saludos Cordiales,
         Equipo tecnico.
         """
-        mensaje.attach(MIMEText(cuerpo_texto, 'plain'))
 
-        # Adjuntar el archivo Excel
-        adjunto = open(excel_filename, 'rb')
-        parte_adjunta = MIMEBase(
-            'application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-        parte_adjunta.set_payload(adjunto.read())
-        encoders.encode_base64(parte_adjunta)
-        parte_adjunta.add_header(
-            'Content-Disposition', f'attachment; filename="{excel_filename}"')
-        mensaje.attach(parte_adjunta)
+        with open(excel_filepath, 'rb') as adjunto:
+            parte_adjunta = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            parte_adjunta.set_payload(adjunto.read())
+            encoders.encode_base64(parte_adjunta)
+            parte_adjunta.add_header('Content-Disposition', f'attachment; filename="{excel_filename}"')
+            mensaje.attach(parte_adjunta)
 
         # Conectar al servidor SMTP y enviar el correo
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as servidor:
@@ -334,6 +337,11 @@ async def enviar_reporte(salon, id_horario):
         print(f"Error al generar y enviar el reporte: {e}")  # Loggear el error
         return jsonify({'mensaje': f'Error al generar el reporte: {str(e)}'}), 500
 
+    finally:
+        # 5. Asegurarse de eliminar el archivo SIEMPRE, incluso si hay un error
+        if os.path.exists(excel_filepath):
+            os.remove(excel_filepath)
+
 
 # enviar mensaje a contactos de quienes tienen una falta en su asistencia
 @app.route('/mensaje/<id_horario>', methods=['POST'])
@@ -349,7 +357,7 @@ async def enviar_mensaje(id_horario):
     cliente = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
 
     alumnos_ausentes = AsistenciaAlumno.query.filter(
-        AsistenciaAlumno.id_horario == id_horario, 
+        AsistenciaAlumno.id_horario == id_horario,
         AsistenciaAlumno.estado == 'ausente',
         AsistenciaAlumno.fecha == datetime.now().date()
         ).all()
@@ -407,14 +415,14 @@ async def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo
                 anti_spoofing=True,
                 align=True
             )
-            
+
             if not face_objs: # No se detectaron caras
                 app.logger.warning("Anti-spoofing: No se detectaron caras en la imagen.")
                 # Si no hay caras, no podemos clasificar, pero no necesariamente es un error de spoofing
                 # Podríamos considerarlo "unknown" o un error específico.
                 # Por ahora, lo tratamos como "unknown" y se guardará en desconocidos.
                 best_match_response["message"] = "No se detectó ninguna cara real."
-            
+
             elif not all(face_obj.get("is_real", False) for face_obj in face_objs):
                 app.logger.warning("Anti-spoofing: Se detectó una posible imagen falsa (spoof).")
                 best_match_response["message"] = "La imagen parece ser un intento de spoofing (falsa)."
@@ -431,15 +439,17 @@ async def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo
                 # No se procede con find si no hay cara
             else:
                 app.logger.error(f"Anti-spoofing: ValueError durante extract_faces: {ve}")
-                best_match_response["message"] = f"Error during anti-spoofing: {str(ve)}"
-            
+                best_match_response["message"] = "No se pudo detectar el rostro correctamente"
+
+
+            best_match_response["message"] = "No se pudo detectar el rostro correctamente"
             return jsonify(best_match_response), 400 # O un 403 Forbidden si es más apropiado
 
         except Exception as e:
             app.logger.error(f"Error inesperado durante anti-spoofing: {e}", exc_info=True)
-            best_match_response["message"] = f"Unexpected error during anti-spoofing: {str(e)}"
+            best_match_response["message"] = "No se pudo detectar el rostro correctamente"
             # No se procede con find y se guarda en desconocidos.
-        
+
         # Solo proceder a DeepFace.find si el anti-spoofing fue exitoso (o no concluyente pero sin error grave)
         # y si no hay un mensaje de error previo que indique no continuar.
         if "message" not in best_match_response or "La imagen parece ser real." in best_match_response.get("message", ""):
@@ -470,7 +480,7 @@ async def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo
                         # Tomamos el primer DataFrame (correspondiente a la primera cara detectada en captured_face_path)
                         # y de ese DataFrame, la primera fila (la coincidencia más cercana)
                         best_match_candidate_df = dfs[0]
-                        
+
                         # La columna de distancia se nombra usualmente como 'model_metric', e.g., 'VGG-Face_cosine'
                         # o puede ser simplemente 'distance' si se usa un wrapper o una versión específica.
                         # Intentemos obtenerla dinámicamente o usar una columna conocida.
@@ -542,17 +552,17 @@ async def ia_recognize_face(): # id_horario no se usa en el nuevo flujo, pero lo
                     else:
                         app.logger.info("No se encontraron coincidencias en la base de datos de caras conocidas.")
                         best_match_response["message"] = "No se encontro al usuario (posible desconocido)."
-                
+
                 except ValueError as ve: # DeepFace.find puede lanzar ValueError si no detecta cara en img_path
                     if "Face could not be detected" in str(ve) or "model instance" in str(ve).lower(): # A veces es "model instance is not built"
                         app.logger.warning(f"DeepFace.find: No se pudo detectar cara en la imagen de entrada: {ve}")
-                        best_match_response["message"] = "Face could not be detected in the input image by find."
+                        best_match_response["message"] = "No se encontro al usuario."
                     else:
                         app.logger.error(f"DeepFace.find: ValueError: {ve}", exc_info=True)
-                        best_match_response["message"] = f"Error during face finding: {str(ve)}"
+                        best_match_response["message"] = "No se encontro al usuario."
                 except Exception as e:
                     app.logger.error(f"Error durante DeepFace.find: {e}", exc_info=True)
-                    best_match_response["message"] = f"An unexpected error occurred during face finding: {str(e)}"
+                    best_match_response["message"] = "No se encontro al usuario."
 
         # 3. Si no se clasificó, guardar la imagen en la carpeta de desconocidos
         if not best_match_response["clasificado"]:
@@ -599,8 +609,8 @@ def obtener_ip_por_nombre(nombre):
             return jsonify({"error": "No se encontró la computadora"}), 404
 
     except Exception as e:
-        return jsonify({'mensaje': f'Error al obtener IP: {str(e)}'}), 500  
-    
+        return jsonify({'mensaje': f'Error al obtener IP: {str(e)}'}), 500
+
 def descargar_imagen(url, nombre_archivo):
     """
     Descarga una imagen desde una URL y la guarda con un nombre de archivo.
@@ -634,7 +644,7 @@ def descargar_imagenes_concurrente(lista_personas):
             if url_imagen:
                 nombre_archivo = os.path.join(
                     # Usa .jpg
-                    RUTA_CARPETA_IMAGENES, f"persona_{persona['id']}_tipo_{persona["tipo"]}.jpg")
+                    RUTA_CARPETA_IMAGENES, f"persona_{persona['id']}_tipo_{persona['tipo']}.jpg")
                 print(f"Preparando descarga de imagen: {nombre_archivo} desde {url_imagen}")
                 futures.append(executor.submit(
                     descargar_imagen, url_imagen, nombre_archivo))
@@ -676,12 +686,12 @@ async def obtener_usuarios(id_horario):
                 "url_img": profesor.url_img,
                 "tipo": 1  # 1 para profesores
             })
-            
+
         descargar_imagenes_concurrente(usuarios_list)  # Descarga las imágenes
         return jsonify({"usuarios": usuarios_list}), 200
     except Exception as e:
         return jsonify({'mensaje': f'Error al obtener usuarios: {str(e)}'}), 500
-    
+
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5000, debug=True)      
+    app.run(host="0.0.0.0", port=5000, debug=True)
