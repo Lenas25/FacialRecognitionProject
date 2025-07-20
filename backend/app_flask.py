@@ -37,22 +37,10 @@ RUTA_DESCONOCIDOS_CLASE_ACTUAL = 'desconocidos_clase_actual'
 MODEL_NAME = "VGG-Face"
 DETECTOR_BACKEND = "opencv" # O "ssd", "dlib", "mtcnn", "retinaface", "mediapipe", "yolov8", "yunet", "fastmtcnn"
 DISTANCE_METRIC = 'cosine' # 'cosine', 'euclidean', 'euclidean_l2'
-DISTANCE_THRESHOLD = 0.60 # Umbral de distancia. Ajusta esto según tus pruebas. Para VGG-Face y cosine.
+DISTANCE_THRESHOLD = 0.65 # Umbral de distancia. Ajusta esto según tus pruebas. Para VGG-Face y cosine.
 
 if not os.path.exists(RUTA_CARPETA_IMAGENES):
     os.makedirs(RUTA_CARPETA_IMAGENES)
-
-# Modelos populares: "VGG-Face", "Facenet", "Facenet512", "ArcFace", "SFace"
-# MODEL_NAME = "Facenet"
-#DISTANCE_THRESHOLD = 0.6  # Ejemplo para Facenet. Reduce para mayor certeza.
-## 'opencv', 'ssd', 'dlib', 'mtcnn', 'retinaface', 'mediapipe'
-#DETECTOR_BACKEND = 'mtcnn'
-
-def execute_automatization(id_profesor):
-    pass
-
-def execute_automatization_close(id_profesor):
-    pass
 
 
 def parse_identity_filename(filename):
@@ -230,34 +218,42 @@ async def registrar_desconocido(id_horario):
 # exportar la asistencia en un excel con la lista de alumnos y profesores, y la lista de desconocidos
 @app.route('/reporte/<salon>/<id_horario>', methods=['POST'])
 async def enviar_reporte(salon, id_horario):
-
     EMAIL_ADDRESS = os.getenv('EMAIL_ADDRESS')
     EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD')
-    RECIPIENT_EMAIL = os.getenv('RECIPIENT_EMAIL')
-
+    ADMIN_RECIPIENT_EMAIL = os.getenv('RECIPIENT_EMAIL')
 
     TEMP_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'temp_reports')
-    os.makedirs(TEMP_FOLDER, exist_ok=True) # Crea la carpeta si no existe
-
+    os.makedirs(TEMP_FOLDER, exist_ok=True)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     excel_filename = f'reporte_asistencia_{salon}_{id_horario}_{timestamp}.xlsx'
     excel_filepath = os.path.join(TEMP_FOLDER, excel_filename)
 
     try:
+        # --- Obtención de datos (sin cambios) ---
         alumnos = AsistenciaAlumno.query.filter(
-            id_horario == id_horario,
+            AsistenciaAlumno.id_horario == id_horario,
             AsistenciaAlumno.fecha == datetime.now().date()
         ).all()
         profesores = AsistenciaProfesor.query.filter(
-            id_horario == id_horario,
-            AsistenciaAlumno.fecha == datetime.now().date()
+            AsistenciaProfesor.id_horario == id_horario,
+            AsistenciaProfesor.fecha == datetime.now().date()
         ).all()
         desconocidos = Desconocido.query.filter(
-            id_horario == id_horario,
+            Desconocido.id_horario == id_horario,
             Desconocido.fecha == datetime.now().date()
         ).all()
 
+        # --- Obtener el correo del profesor desde la BD ---
+        profesor_email = None
+        horario = Horario.query.filter_by(id=id_horario).first()
+        if horario and hasattr(horario, 'profesor') and hasattr(horario.profesor, 'correo'):
+            profesor_email = horario.profesor.correo
+            print(f"Correo del docente encontrado: {profesor_email}")
+        else:
+            print(f"No se encontró un correo de docente para el horario {id_horario}")
+
+        # --- Creación del Excel (sin cambios) ---
         df_desconocidos = pd.DataFrame([(d.id_horario, d.url_img, d.fecha.strftime('%Y-%m-%d')) for d in desconocidos],
                                        columns=['Seccion', 'Imagen', 'Fecha de Detección'])
         df_alumnos = pd.DataFrame([(a.id, a.id_horario, a.id_alumno, a.estado, a.fecha.strftime('%Y-%m-%d'), a.tiempo_permanencia) for a in alumnos],
@@ -266,54 +262,66 @@ async def enviar_reporte(salon, id_horario):
                                    columns=['ID', 'Seccion', 'Código de Profesor', 'Estado', 'Fecha de Detección', 'Tiempo Asistencia (min)'])
 
         with pd.ExcelWriter(excel_filepath, engine="xlsxwriter") as writer:
-            df_alumnos.to_excel(writer, sheet_name='Alumnos', index=False)
-            df_docentes.to_excel(writer, sheet_name='Docentes', index=False)
-            df_desconocidos.to_excel(writer, sheet_name='Desconocidos', index=False)
+                    df_alumnos.to_excel(writer, sheet_name='Alumnos', index=False)
+                    df_docentes.to_excel(writer, sheet_name='Docentes', index=False)
+                    df_desconocidos.to_excel(writer, sheet_name='Desconocidos', index=False)
 
-            workbook = writer.book
+                    workbook = writer.book
 
-            # Formato para encabezados: fondo azul claro, texto blanco, negrita, bordes
-            header_format = workbook.add_format({
-                'bold': True,
-                'bg_color': '#B50D30',
-                'font_color': 'white',
-                'border': 1,
-                'align': 'center'
-            })
-            # Formato para celdas normales: bordes
-            cell_format = workbook.add_format({'border': 1})
+                    # Formato para encabezados: fondo azul claro, texto blanco, negrita, bordes
+                    header_format = workbook.add_format({
+                        'bold': True,
+                        'bg_color': '#B50D30',
+                        'font_color': 'white',
+                        'border': 1,
+                        'align': 'center'
+                    })
+                    # Formato para celdas normales: bordes
+                    cell_format = workbook.add_format({'border': 1})
 
-            # Formatear cada hoja
-            for sheet_name, df in zip(['Alumnos', 'Docentes', 'Desconocidos'],
-                                    [df_alumnos, df_docentes, df_desconocidos]):
-                worksheet = writer.sheets[sheet_name]
+                    # Formatear cada hoja
+                    for sheet_name, df in zip(['Alumnos', 'Docentes', 'Desconocidos'],
+                                            [df_alumnos, df_docentes, df_desconocidos]):
+                        worksheet = writer.sheets[sheet_name]
 
-                # Ajustar ancho de columnas y aplicar formato de encabezado
-                for i, col in enumerate(df.columns):
-                    column_len = max(df[col].astype(str).map(len).max(), len(col))
-                    worksheet.set_column(i, i, column_len + 2, cell_format)
-                    worksheet.write(0, i, col, header_format)  # Encabezado con formato
+                        # Ajustar ancho de columnas y aplicar formato de encabezado
+                        for i, col in enumerate(df.columns):
+                            column_len = max(df[col].astype(str).map(len).max(), len(col))
+                            worksheet.set_column(i, i, column_len + 2, cell_format)
+                            worksheet.write(0, i, col, header_format)  # Encabezado con formato
 
-                # Aplicar formato de borde a todas las celdas de datos
-                for row in range(1, len(df) + 1):
-                    for col in range(len(df.columns)):
-                        worksheet.write(row, col, df.iloc[row - 1, col], cell_format)
+                        # Aplicar formato de borde a todas las celdas de datos
+                        for row in range(1, len(df) + 1):
+                            for col in range(len(df.columns)):
+                                worksheet.write(row, col, df.iloc[row - 1, col], cell_format)
+
+        # --- Lógica de envío de correo ---
+
+        recipients = []
+        if ADMIN_RECIPIENT_EMAIL:
+            recipients.append(ADMIN_RECIPIENT_EMAIL)
+        if profesor_email:
+            if profesor_email not in recipients:
+                recipients.append(profesor_email)
+
+        if not recipients:
+            return jsonify({'mensaje': 'Reporte generado, pero no se encontraron destinatarios configurados.'}), 400
 
         mensaje = MIMEMultipart()
         mensaje['From'] = EMAIL_ADDRESS
-        mensaje['To'] = RECIPIENT_EMAIL
         mensaje['Subject'] = f'Reporte de Asistencia del salon - {salon} con seccion - {id_horario}'
+        mensaje['To'] = ''
 
-        # Cuerpo del correo (texto plano)
         cuerpo_texto = """
-        Buenas tardes estimado,
+                Buenas tardes estimado,
 
-        El presente correo es para poder enviarle la lista de alumnos y docente que asistieron a la clase del dia de hoy. Asimismo
-        adjunto se encuentra el archivo excel con los detalles correspondientes y el tiempo de permanencia de cada persona.
+                El presente correo es para poder enviarle la lista de alumnos y docente que asistieron a la clase del dia de hoy. Asimismo
+                adjunto se encuentra el archivo excel con los detalles correspondientes y el tiempo de permanencia de cada persona.
 
-        Saludos Cordiales,
-        Equipo tecnico.
-        """
+                Saludos Cordiales,
+                Equipo tecnico.
+                """
+        mensaje.attach(MIMEText(cuerpo_texto, 'plain'))
 
         with open(excel_filepath, 'rb') as adjunto:
             parte_adjunta = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
@@ -322,26 +330,47 @@ async def enviar_reporte(salon, id_horario):
             parte_adjunta.add_header('Content-Disposition', f'attachment; filename="{excel_filename}"')
             mensaje.attach(parte_adjunta)
 
-        # Conectar al servidor SMTP y enviar el correo
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as servidor:
-            servidor.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
-            servidor.sendmail(EMAIL_ADDRESS, RECIPIENT_EMAIL,
-                              mensaje.as_string())
+        sent_to = []
+        failed_to = {}
 
-        adjunto.close()
-        os.remove(excel_filename)
+        try:
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465) as servidor:
+                servidor.login(EMAIL_ADDRESS, EMAIL_PASSWORD)
 
-        return jsonify({'mensaje': 'Reporte generado y enviado con éxito'}), 200
+                for recipient in recipients:
+                    try:
+                        mensaje.replace_header('To', recipient)
+                        servidor.sendmail(EMAIL_ADDRESS, recipient, mensaje.as_string())
+                        sent_to.append(recipient)
+                        print(f"Correo enviado exitosamente a: {recipient}")
+                    except Exception as mail_error:
+                        failed_to[recipient] = str(mail_error)
+                        print(f"Fallo al enviar correo a {recipient}: {mail_error}")
+        except smtplib.SMTPAuthenticationError as auth_error:
+            print(f"Error de autenticación SMTP: {auth_error}")
+            return jsonify({'mensaje': f'Error de autenticación SMTP. Revisa las credenciales de correo.'}), 500
+
+        if not failed_to:
+            response_message = f'Reporte generado y enviado con éxito a: {", ".join(sent_to)}'
+            status_code = 200
+        elif sent_to:
+            response_message = (f"Envío parcial. Éxito: {', '.join(sent_to)}. "
+                                f"Fallo: {'; '.join([f'{email} ({err})' for email, err in failed_to.items()])}")
+            status_code = 207
+        else:
+            response_message = f"Error: No se pudo enviar el reporte a ningún destinatario. Errores: {failed_to}"
+            status_code = 500
+
+        return jsonify({'mensaje': response_message}), status_code
 
     except Exception as e:
-        print(f"Error al generar y enviar el reporte: {e}")  # Loggear el error
-        return jsonify({'mensaje': f'Error al generar el reporte: {str(e)}'}), 500
+        print(f"Error crítico al generar y enviar el reporte: {e}")
+        return jsonify({'mensaje': f'Error crítico al generar el reporte: {str(e)}'}), 500
 
     finally:
-        # 5. Asegurarse de eliminar el archivo SIEMPRE, incluso si hay un error
         if os.path.exists(excel_filepath):
             os.remove(excel_filepath)
-
+            print(f"Archivo temporal eliminado: {excel_filepath}")
 
 # enviar mensaje a contactos de quienes tienen una falta en su asistencia
 @app.route('/mensaje/<id_horario>', methods=['POST'])

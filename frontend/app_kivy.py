@@ -129,9 +129,9 @@ class CamaraScreen(Screen):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.lock_envio_profesor = Lock()
-        self.procesando_reconocimiento = False
         self.app = App.get_running_app()
+
+        self.procesando_reconocimiento = False
         self.asistencias = []
         self.detectar_rostro = False
         self.orientation = 'horizontal'
@@ -159,7 +159,7 @@ class CamaraScreen(Screen):
         self.yolo_model = YOLO(self.model_path)
         self.centro_x_imagen = 0.5
         self.tolerancia_x = 0.2
-        self.varianza_laplace_minima = 0.1
+        self.varianza_laplace_minima = 80.0
 
     def calcular_varianza_laplace(self, imagen):
         gray = cv2.cvtColor(imagen, cv2.COLOR_BGR2GRAY)
@@ -274,31 +274,29 @@ class CamaraScreen(Screen):
             id_horario = mejor_horario['id']
             self.storage.put("horario_actual", horario=mejor_horario)
 
-            if not hasattr(self, 'horarios_procesados_inicio'):
-                self.horarios_procesados_inicio = {}
-            if not hasattr(self, 'horarios_procesados_cierre'):
-                self.horarios_procesados_cierre = {}
-
-            # INICIO DE CLASE
-            if hora_actual >= mejor_inicio - timedelta(minutes=minutos_antes) and not self.horarios_procesados_inicio.get(id_horario, False):
-                self.horarios_procesados_inicio[id_horario] = True
-                # Ejecutar en hilo para no bloquear
-                thread = Thread(target=self.iniciar_clase, args=(id_horario,))
-                thread.start()
+            # --- SOLUCIÓN: INICIO DE CLASE PROTEGIDO CON LOCK ---
+            if hora_actual >= mejor_inicio - timedelta(minutes=minutos_antes) and not self.app.horarios_procesados_inicio.get(id_horario, False):
+                with self.app.lock_iniciar_clase:
+                    if not self.app.horarios_procesados_inicio.get(id_horario, False):
+                        self.app.horarios_procesados_inicio[id_horario] = True
+                        print(f"ACCIÓN: Iniciando clase para horario {id_horario} por primera vez.")
+                        thread = Thread(target=self.iniciar_clase, args=(id_horario,))
+                        thread.start()
 
             # DURANTE LA CLASE
             elif mejor_inicio <= hora_actual <= mejor_fin:
                 if not self.detectar_rostro and not self.procesando_reconocimiento:
                     self.detectar_rostro = True
 
-            # FIN DE CLASE
+            # --- SOLUCIÓN: FIN DE CLASE PROTEGIDO CON LOCK (como ya lo tenías) ---
             elif mejor_fin < hora_actual <= mejor_fin + timedelta(minutes=minutos_despues):
-                if not self.horarios_procesados_cierre.get(id_horario, False):
-                    self.horarios_procesados_cierre[id_horario] = True
-                    self.detectar_rostro = False
-                    # Ejecutar en hilo para no bloquear
-                    thread = Thread(target=self.finalizar_clase, args=(id_horario,))
-                    thread.start()
+                with self.app.lock_finalizar_clase: # Protegemos esta sección
+                    if not self.app.horarios_procesados_cierre.get(id_horario, False):
+                        self.app.horarios_procesados_cierre[id_horario] = True
+                        self.detectar_rostro = False
+                        print(f"ACCIÓN: Finalizando clase para horario {id_horario} por primera vez.")
+                        thread = Thread(target=self.finalizar_clase, args=(id_horario,))
+                        thread.start()
 
     def iniciar_clase(self, id_horario):
         # Mostrar popup de carga desde el hilo principal de Kivy
@@ -540,7 +538,7 @@ class CamaraScreen(Screen):
         datos = self.calcular_asistencia(minutes)
         print(f"Guardando asistencia para el horario {id_horario} con los siguientes datos: {datos}")
         response = requests.post(f'{endpoints["asistencia"]}/{id_horario}', json=datos)
-        if response.status_code == 200:
+        if response.status_code == 201:
             print("Asistencia guardada correctamente")
         else:
             print(f"Error al guardar asistencia: {response}")
@@ -663,6 +661,12 @@ class ReconocimientoFacialApp(App):
         super().__init__(**kwargs)
         self.storage = JsonStore('local.json')
         self.storage_asistencia = JsonStore('asistencia.json')
+        self.horarios_procesados_inicio = {}
+        self.horarios_procesados_cierre = {}
+        self.lock_iniciar_clase = Lock()
+        self.lock_finalizar_clase = Lock()
+        self.lock_envio_profesor = Lock()
+
 
     def build(self):
         # Asegúrate de que el archivo .kv se cargue si lo tienes
