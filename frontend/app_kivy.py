@@ -433,7 +433,7 @@ class CamaraScreen(Screen):
                 url = f"http://{ip_computadora}:5000/iniciar"
 
                 max_retries = 3
-                delay = 3
+                delay = 10
                 for intento in range(max_retries):
                     try:
                         print(f"DEBUG: Intento {intento+1} de conexión a {url}")
