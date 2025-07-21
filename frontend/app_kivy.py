@@ -394,7 +394,7 @@ class CamaraScreen(Screen):
         self.mostrar_popup(title, content)
 
     def enviar_datos_profesor(self, datos_profesor, horario):
-        with self.lock_envio_profesor:
+        with self.app.lock_envio_profesor:
             try:
                 self.storage = JsonStore('local.json')
                 salon = self.storage.get("salon")["salon"]
@@ -533,15 +533,16 @@ class CamaraScreen(Screen):
 
     # esta funcion guarda la asistencia de varios usuarios en la base de datos, recibe el id del horario y envia los datos calculados por calcular_asistencia
     def guardar_asistencia(self, id_horario):
-        self.storage_asistencia = JsonStore('asistencia.json')
-        minutes = os.getenv('MINUTES_DELAY', '15')
-        datos = self.calcular_asistencia(minutes)
-        print(f"Guardando asistencia para el horario {id_horario} con los siguientes datos: {datos}")
-        response = requests.post(f'{endpoints["asistencia"]}/{id_horario}', json=datos)
-        if response.status_code == 201:
-            print("Asistencia guardada correctamente")
-        else:
-            print(f"Error al guardar asistencia: {response}")
+            self.storage_asistencia = JsonStore('asistencia.json')
+            minutes = os.getenv('MINUTES_DELAY', '15')
+            datos = self.calcular_asistencia(minutes)
+            print(f"Guardando asistencia para el horario {id_horario} con los siguientes datos: {datos}")
+            if len(datos) > 0:
+                response = requests.post(f'{endpoints["asistencia"]}/{id_horario}', json=datos)
+                if response.status_code == 201:
+                    print("Asistencia guardada correctamente")
+                else:
+                    print(f"Error al guardar asistencia: {response}")
 
     def guardar_asistencia_local(self, datos):
         self.storage_asistencia = JsonStore('asistencia.json')
@@ -652,8 +653,8 @@ class CamaraScreen(Screen):
         box.add_widget(close_button)
         popup.content = box
         popup.open()
-        # Cierra el popup después de 5 segundos
-        Clock.schedule_once(lambda dt: popup.dismiss(), 5)
+        # Cierra el popup después de 3 segundos
+        Clock.schedule_once(lambda dt: popup.dismiss(), 3)
 
 
 class ReconocimientoFacialApp(App):
